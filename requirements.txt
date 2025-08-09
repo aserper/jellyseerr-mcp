@@ -1,0 +1,4 @@
+httpx>=0.27
+python-dotenv>=1.0
+rich>=13.7
+mcp>=1.1
