@@ -4,6 +4,8 @@ import asyncio
 from typing import Any, Tuple
 
 from mcp.server.fastmcp import FastMCP
+from starlette.requests import Request
+from starlette.responses import JSONResponse, PlainTextResponse
 
 from .client import JellyseerrClient
 from .config import load_config
@@ -22,6 +24,7 @@ def create_server() -> Tuple[FastMCP, JellyseerrClient]:
         "jellyseerr",
         host=config.host,
         port=config.port,
+        message_path="/messages",  # avoid trailing slash for broader client compatibility
         auth=auth_settings,
         token_verifier=token_verifier,
     )
@@ -55,6 +58,15 @@ def create_server() -> Tuple[FastMCP, JellyseerrClient]:
         data = await client.request(method=method, endpoint=endpoint, params=params, json=body)
         logger.info("✅ Raw request complete")
         return data
+
+    # Health endpoints for HTTP transports/direct probing by clients
+    @server.custom_route("/", methods=["GET"])
+    async def root(_: Request):
+        return PlainTextResponse("Jellyseerr MCP Server OK")
+
+    @server.custom_route("/health", methods=["GET"])  # common convention
+    async def health(_: Request):
+        return JSONResponse({"status": "ok", "service": "jellyseerr-mcp"})
 
     return server, client
 
