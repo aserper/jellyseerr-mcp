@@ -24,7 +24,7 @@ def create_server() -> Tuple[FastMCP, JellyseerrClient]:
         "jellyseerr",
         host=config.host,
         port=config.port,
-        message_path="/messages",  # avoid trailing slash for broader client compatibility
+        # Use FastMCP defaults: sse at /sse, messages at /messages/
         auth=auth_settings,
         token_verifier=token_verifier,
     )
