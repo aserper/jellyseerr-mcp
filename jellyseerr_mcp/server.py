@@ -6,6 +6,7 @@ from typing import Any, Tuple
 from mcp.server.fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse
+from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 
 from .client import JellyseerrClient
 from .config import load_config
@@ -77,6 +78,20 @@ def create_server() -> Tuple[FastMCP, JellyseerrClient]:
     @server.custom_route("/health", methods=["GET"])  # common convention
     async def health(_: Request):
         return JSONResponse({"status": "ok", "service": "jellyseerr-mcp"})
+
+    @server.custom_route("/auth-check", methods=["GET"])  # debug helper
+    async def auth_check(request: Request):
+        # Show whether auth middleware recognized the user
+        user = getattr(request, "user", None)
+        auth = isinstance(user, AuthenticatedUser)
+        authz = request.headers.get("authorization")
+        return JSONResponse({
+            "authorized": auth,
+            "authHeaderPresent": bool(authz),
+            "authHeaderPrefix": (authz.split(" ")[0] if authz else None),
+            "user": getattr(user, "identity", None),
+            "scopes": getattr(user, "scopes", None),
+        })
 
     return server, client
 
