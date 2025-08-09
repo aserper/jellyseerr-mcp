@@ -8,15 +8,24 @@ from mcp.server.fastmcp import FastMCP
 from .client import JellyseerrClient
 from .config import load_config
 from .logging_setup import setup_logging
+from .auth import build_auth
 
 
 def create_server() -> Tuple[FastMCP, JellyseerrClient]:
     logger = setup_logging()
     logger.info("🚀 Starting Jellyseerr MCP server…")
 
-    server = FastMCP("jellyseerr")
-
     config = load_config()
+    auth_settings, token_verifier = build_auth(config)
+
+    server = FastMCP(
+        "jellyseerr",
+        host=config.host,
+        port=config.port,
+        auth=auth_settings,
+        token_verifier=token_verifier,
+    )
+
     client = JellyseerrClient(config)
 
     @server.tool(name="search_media", description="Search Jellyseerr for media by text query.")
@@ -53,7 +62,20 @@ def create_server() -> Tuple[FastMCP, JellyseerrClient]:
 async def main() -> None:
     server, client = create_server()
     try:
-        await server.run_stdio_async()
+        # Choose transport
+        from .config import load_config as _load
+        cfg = _load()
+        if cfg.transport == "stdio":
+            await server.run_stdio_async()
+        elif cfg.transport == "sse":
+            # SSE over HTTP (requires uvicorn via FastMCP)
+            import anyio
+
+            await server.run_sse_async(mount_path=cfg.mount_path)
+        elif cfg.transport == "streamable-http":
+            await server.run_streamable_http_async()
+        else:
+            raise RuntimeError(f"Unknown MCP_TRANSPORT: {cfg.transport}")
     finally:
         # After server exits, cleanup HTTP client
         await client.close()
