@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+import logging
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.server.auth.settings import AuthSettings
 
@@ -18,10 +19,18 @@ class EnvTokenVerifier(TokenVerifier):
     def __init__(self, allowed_tokens: list[str], scopes: Optional[list[str]] = None):
         self.allowed = set(allowed_tokens)
         self.scopes = scopes or []
+        self._log = logging.getLogger("jellyseerr_mcp")
 
     async def verify_token(self, token: str) -> Optional[AccessToken]:
-        if token in self.allowed:
-            return AccessToken(token=token, client_id="env-bearer", scopes=self.scopes)
+        tok = token.strip()
+        if tok.startswith("Bearer "):
+            tok = tok[len("Bearer "):].strip()
+        allowed_preview = ",".join(list(self.allowed)[:3])
+        self._log.debug(f"🔐 Verifying token; got='{tok[:6]}…' allowed~[{allowed_preview}] scopes={self.scopes}")
+        if tok in self.allowed:
+            self._log.debug("✅ Token accepted")
+            return AccessToken(token=tok, client_id="env-bearer", scopes=self.scopes)
+        self._log.warning("❌ Token rejected or missing")
         return None
 
 
@@ -46,4 +55,3 @@ def build_auth(config: AppConfig) -> tuple[Optional[AuthSettings], Optional[Toke
         token_verifier = EnvTokenVerifier(config.auth_bearer_tokens, scopes=config.auth_required_scopes)
 
     return auth_settings, token_verifier
-
