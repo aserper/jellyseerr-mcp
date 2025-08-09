@@ -49,6 +49,7 @@ Then connect your MCP client to `http://127.0.0.1:8797` and pass `Authorization:
 - `search_media(query: str)` — Search Jellyseerr for media by query.
 - `request_media(media_id: int, media_type: str)` — Create a media request.
 - `get_request(request_id: int)` — Fetch a request’s details/status.
+- `ping()` — Liveness check with server/transport info.
 
 More tools can be added easily — see `jellyseerr_mcp/server.py`.
 

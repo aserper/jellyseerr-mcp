@@ -31,6 +31,16 @@ def create_server() -> Tuple[FastMCP, JellyseerrClient]:
 
     client = JellyseerrClient(config)
 
+    @server.tool(name="ping", description="Simple liveness check. Returns server and transport info.")
+    async def ping() -> Any:  # type: ignore[override]
+        logger.info("🏓 Ping received")
+        return {
+            "ok": True,
+            "service": "jellyseerr-mcp",
+            "transport": config.transport,
+            "authEnabled": config.auth_enabled,
+        }
+
     @server.tool(name="search_media", description="Search Jellyseerr for media by text query.")
     async def search_media(query: str) -> Any:  # type: ignore[override]
         logger.info(f"🔎 Searching media for query: [bold cyan]{query}[/]")
