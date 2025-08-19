@@ -13,7 +13,6 @@ from .config import load_config
 from .logging_setup import setup_logging
 from .auth import build_auth
 
-
 def create_server() -> Tuple[FastMCP, JellyseerrClient]:
     logger = setup_logging()
     logger.info("🚀 Starting Jellyseerr MCP server…")
@@ -63,16 +62,21 @@ def create_server() -> Tuple[FastMCP, JellyseerrClient]:
         logger.info("✅ Request fetched")
         return data
 
-    @server.tool(name="raw_request", description="Low-level tool to call any Jellyseerr endpoint. method in {GET,POST,PUT,DELETE} and endpoint relative to /api/v1.")
+    @server.tool(name="raw_request", description="(Advanced) Low-level tool to call any Jellyseerr endpoint. Use with caution.")
     async def raw_request(method: str, endpoint: str, params: dict | None = None, body: dict | None = None) -> Any:  # type: ignore[override]
         logger.info(f"🛠️ Raw request {method.upper()} {endpoint}")
+        
+        allowed_methods = {"GET", "POST", "PUT", "DELETE"}
+        if method.upper() not in allowed_methods:
+            raise ValueError(f"Unsupported method: {method}. Must be one of {allowed_methods}")
+
         data = await client.request(method=method, endpoint=endpoint, params=params, json=body)
         logger.info("✅ Raw request complete")
         return data
 
     # Health endpoints for HTTP transports/direct probing by clients
     @server.custom_route("/", methods=["GET"])
-    async def root(_: Request):
+    async def root(request: Request):
         return PlainTextResponse("Jellyseerr MCP Server OK")
 
     @server.custom_route("/health", methods=["GET"])  # common convention
