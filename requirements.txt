@@ -4,3 +4,4 @@ rich>=13.7
 mcp>=1.1
 uvicorn>=0.30
 anyio>=3.6
+PyYAML>=6.0

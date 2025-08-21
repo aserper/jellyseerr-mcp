@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import httpx
 from typing import Any, Dict, Optional
+from urllib.parse import quote_plus
 
 from .config import AppConfig
 
@@ -52,7 +53,9 @@ class JellyseerrClient:
 
     # Convenience methods for common operations
     async def search_media(self, query: str, limit: int = 20) -> Any:
-        return await self.request("GET", "search", params={"query": query, "limit": limit})
+        # URL encode the query to handle spaces and special characters
+        encoded_query = quote_plus(query)
+        return await self.request("GET", "search", params={"query": encoded_query})
 
     async def request_media(self, media_id: int, media_type: str, is_4k: bool = False) -> Any:
         # Discover media details to find the correct media ID to request

@@ -15,7 +15,15 @@ async def main():
         if session_id:
             response = await client.post(
                 f"http://127.0.0.1:8797/messages/?session_id={session_id}",
-                json={"tool": "ping", "args": {}}
+                json={
+                    "jsonrpc": "2.0",
+                    "method": "tools/call",
+                    "params": {
+                        "name": "ping",
+                        "arguments": {}
+                    },
+                    "id": 1
+                }
             )
             print(response.text)
 

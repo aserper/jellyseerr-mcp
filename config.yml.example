@@ -1,0 +1,46 @@
+# Jellyseerr MCP Server Configuration
+# Copy this file to config.yml and customize for your setup
+
+# Jellyseerr API configuration
+jellyseerr:
+  # URL of your Jellyseerr instance (required)
+  url: "https://demo.jellyseerr.dev"
+  
+  # API key from Jellyseerr settings (required)
+  api_key: "your_api_key_here"
+  
+  # Request timeout in seconds (optional, default: 15.0)
+  timeout: 15.0
+
+# MCP server configuration
+server:
+  # Transport type: stdio (recommended), sse, or streamable-http
+  transport: "stdio"
+  
+  # Server host (for HTTP transports)
+  host: "127.0.0.1"
+  
+  # Server port (for HTTP transports)
+  port: 8797
+  
+  # Mount path (for HTTP transports)
+  mount_path: "/"
+
+# Authentication configuration (for HTTP transports only)
+auth:
+  # Enable authentication (optional, default: false)
+  enabled: false
+  
+  # JWT issuer URL (optional)
+  issuer_url: "http://localhost:8797"
+  
+  # Resource server URL (optional)
+  resource_server_url: "http://localhost:8797"
+  
+  # Allowed bearer tokens for development (optional)
+  bearer_tokens:
+    - "devtoken123"
+    - "another_token"
+  
+  # Required OAuth scopes (optional)
+  required_scopes: []
