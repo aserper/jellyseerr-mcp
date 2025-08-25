@@ -54,6 +54,4 @@ Then connect your MCP client to `http://127.0.0.1:8797` and pass `Authorization:
 More tools can be added easily — see `jellyseerr_mcp/server.py`.
 
 ## Notes
-- The previous FastAPI stub has been replaced with a proper MCP server scaffold.
-- HTTP transport (SSE) is available with optional bearer token auth. Full OAuth 2.0 flows require an external issuer or a provider implementation — tell me your preferred OAuth provider and I’ll wire it in.
 - The bearer token authentication is a simple implementation and not a full OAuth 2.0 flow. It is suitable for local development or simple deployments until an external issuer is used.
