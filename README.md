@@ -24,26 +24,12 @@ JELLYSEERR_TIMEOUT=15
 ```
 
 ## Running the MCP server
-This server supports stdio (default) and optional HTTP transports.
-
-Stdio (recommended for MCP clients):
 
 ```
 python -m jellyseerr_mcp
 ```
 
-You should see colorful logs indicating the server is ready over stdio.
-
-HTTP (SSE) with Bearer token auth (for tools that prefer HTTP + OAuth-style auth):
-
-```
-FASTMCP_HOST=127.0.0.1 FASTMCP_PORT=8797 MCP_TRANSPORT=sse \
-AUTH_ENABLED=true AUTH_ISSUER_URL=http://localhost:8797 \
-AUTH_RESOURCE_SERVER_URL=http://localhost:8797 \
-AUTH_BEARER_TOKENS=devtoken123 python -m jellyseerr_mcp
-```
-
-Then connect your MCP client to `http://127.0.0.1:8797` and pass `Authorization: Bearer devtoken123`.
+You should see colorful logs indicating the server is ready on stdio. The server communicates via stdin/stdout, making it compatible with Claude Desktop and other MCP clients.
 
 ## Exposed tools (initial set)
 - `search_media(query: str)` — Search Jellyseerr for media by query.
@@ -52,6 +38,3 @@ Then connect your MCP client to `http://127.0.0.1:8797` and pass `Authorization:
 - `ping()` — Liveness check with server/transport info.
 
 More tools can be added easily — see `jellyseerr_mcp/server.py`.
-
-## Notes
-- The bearer token authentication is a simple implementation and not a full OAuth 2.0 flow. It is suitable for local development or simple deployments until an external issuer is used.
