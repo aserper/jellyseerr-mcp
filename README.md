@@ -1,3 +1,5 @@
+![Jellyseerr MCP Server](header.png)
+
 # Jellyseerr MCP Server
 
 [![Tests](https://img.shields.io/github/actions/workflow/status/aserper/jellyseerr-mcp/test.yml?style=for-the-badge&logo=github&label=Tests)](https://github.com/aserper/jellyseerr-mcp/actions/workflows/test.yml)
