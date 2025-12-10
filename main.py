@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 
 from jellyseerr_mcp.server import run as run_mcp
@@ -28,8 +29,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--port",
         type=int,
-        default=8000,
-        help="Port to serve SSE on (default: 8000)",
+        default=int(os.environ.get("PORT", 8000)),
+        help="Port to serve SSE on (default: $PORT or 8000)",
     )
     args = parser.parse_args()
 
