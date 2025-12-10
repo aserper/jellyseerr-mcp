@@ -42,9 +42,15 @@ You should see colorful logs indicating the server is ready on stdio. The server
 
 ## Docker
 
-You can also run the server using Docker. The image is based on a slim Python environment.
+You can run the server using Docker by either pulling the pre-built image from the GitHub Container Registry (GHCR) or building it yourself.
 
-### Build
+### Pull from GHCR
+
+```bash
+docker pull ghcr.io/aserper/jellyseerr-mcp:latest
+```
+
+### Build Locally
 
 ```bash
 docker build -t jellyseerr-mcp .
@@ -53,7 +59,17 @@ docker build -t jellyseerr-mcp .
 ### Run
 
 ```bash
-docker run --rm -it -e JELLYSEERR_URL=... -e JELLYSEERR_API_KEY=... jellyseerr-mcp
+# If you pulled from GHCR:
+docker run --rm -it \
+  -e JELLYSEERR_URL="https://your-jellyseerr.com" \
+  -e JELLYSEERR_API_KEY="your_api_key" \
+  ghcr.io/aserper/jellyseerr-mcp:latest
+
+# If you built locally:
+docker run --rm -it \
+  -e JELLYSEERR_URL="https://your-jellyseerr.com" \
+  -e JELLYSEERR_API_KEY="your_api_key" \
+  jellyseerr-mcp
 ```
 
 ### Multi-MCP Configuration
