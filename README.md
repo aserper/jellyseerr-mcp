@@ -4,9 +4,10 @@ An MCP (Model Context Protocol) server for Jellyseerr that exposes Jellyseerr AP
 
 ## Features
 - Exposes key Jellyseerr endpoints as MCP tools (search, request, get request status, etc.)
-- Async HTTP client with robust error handling and timeouts
+- Synchronous HTTP client with robust error handling and timeouts
 - Colorful, structured logging via Rich with emoji indicators
 - Configuration via environment variables (`.env` supported)
+- Non-blocking stdio server compatible with multi-mcp configurations
 
 ## Requirements
 - Python 3.10+
@@ -30,6 +31,25 @@ python -m jellyseerr_mcp
 ```
 
 You should see colorful logs indicating the server is ready on stdio. The server communicates via stdin/stdout, making it compatible with Claude Desktop and other MCP clients.
+
+### Multi-MCP Configuration
+
+The server is designed to work seamlessly with multi-mcp configurations. Example `mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "jellyseerr": {
+      "command": "/path/to/.venv/bin/python",
+      "args": ["-m", "jellyseerr_mcp"],
+      "env": {
+        "JELLYSEERR_URL": "https://your-jellyseerr.example.com",
+        "JELLYSEERR_API_KEY": "your_api_key_here"
+      }
+    }
+  }
+}
+```
 
 ## Exposed tools (initial set)
 - `search_media(query: str)` — Search Jellyseerr for media by query.
