@@ -32,6 +32,22 @@ python -m jellyseerr_mcp
 
 You should see colorful logs indicating the server is ready on stdio. The server communicates via stdin/stdout, making it compatible with Claude Desktop and other MCP clients.
 
+## Docker
+
+You can also run the server using Docker. The image is based on a slim Python environment.
+
+### Build
+
+```bash
+docker build -t jellyseerr-mcp .
+```
+
+### Run
+
+```bash
+docker run --rm -it -e JELLYSEERR_URL=... -e JELLYSEERR_API_KEY=... jellyseerr-mcp
+```
+
 ### Multi-MCP Configuration
 
 The server is designed to work seamlessly with multi-mcp configurations. Example `mcp.json`:

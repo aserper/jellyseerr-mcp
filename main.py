@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import sys
 
-from jellyseerr_mcp.server import main as run_mcp
+from jellyseerr_mcp.server import run as run_mcp
 
 MIN_PYTHON_VERSION = (3, 10)
 
@@ -16,4 +16,21 @@ def _check_python_version() -> None:
 if __name__ == "__main__":
     _check_python_version()
     # Entry point for MCP stdio server
-    asyncio.run(run_mcp())
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Jellyseerr MCP Server")
+    parser.add_argument(
+        "--transport",
+        default="stdio",
+        choices=["stdio", "sse"],
+        help="Transport protocol to use (default: stdio)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port to serve SSE on (default: 8000)",
+    )
+    args = parser.parse_args()
+
+    asyncio.run(run_mcp(transport=args.transport, port=args.port))

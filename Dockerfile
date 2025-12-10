@@ -8,6 +8,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 ENV FASTMCP_HOST=0.0.0.0
-ENV FASTMCP_PORT=8797
+ENV FASTMCP_PORT=8000
+EXPOSE 8000
 
-CMD ["python", "-m", "jellyseerr_mcp"]
+CMD ["python", "main.py", "--transport", "sse", "--port", "8000"]

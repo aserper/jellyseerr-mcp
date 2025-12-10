@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.auth.settings import AuthSettings
 
 from .client import JellyseerrClient
 from .config import load_config
@@ -65,13 +66,25 @@ def raw_request(method: str, endpoint: str, params: dict | None = None, body: di
     return data
 
 
-def run() -> None:
+def run(transport: str = "stdio", port: int = 8000) -> None:
     global _client
     logger.info("🚀 Starting Jellyseerr MCP server…")
     config = load_config()
     _client = JellyseerrClient(config)
+
+    if transport == "sse":
+        mcp.settings.port = port
+        if config.auth_issuer_url:
+             mcp.settings.auth = AuthSettings(
+                 issuer_url=config.auth_issuer_url,
+                 resource_server_url=config.auth_resource_server_url,
+                 required_scopes=config.auth_required_scopes,
+             )
+        else:
+             logger.warning("⚠️ No Auth Issuer URL provided. SSE server will run without Auth configuration (if supported by MCP lib).")
+
     try:
-        mcp.run(transport="stdio")
+        mcp.run(transport=transport)
     finally:
         if _client is not None:
             _client.close()
