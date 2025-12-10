@@ -1,5 +1,5 @@
 __all__ = [
-    "create_server",
+    "run",
 ]
 
-from .server import create_server  # noqa: F401
+from .server import run  # noqa: F401
