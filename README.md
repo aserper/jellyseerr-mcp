@@ -3,6 +3,7 @@
 [![Tests](https://img.shields.io/github/actions/workflow/status/aserper/jellyseerr-mcp/test.yml?style=for-the-badge&logo=github&label=Tests)](https://github.com/aserper/jellyseerr-mcp/actions/workflows/test.yml)
 [![Supported Python versions](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](README.md#license)
+[![GHCR](https://img.shields.io/badge/ghcr.io-jellyseerr--mcp-blue?style=for-the-badge&logo=docker&logoColor=white)](https://github.com/aserper/jellyseerr-mcp/pkgs/container/jellyseerr-mcp)
 
 [![GitHub stars](https://img.shields.io/github/stars/aserper/jellyseerr-mcp.svg?style=social)](https://github.com/aserper/jellyseerr-mcp)
 [![GitHub forks](https://img.shields.io/github/forks/aserper/jellyseerr-mcp.svg?style=social)](https://github.com/aserper/jellyseerr-mcp/fork)
