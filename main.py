@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import os
 import sys
 
@@ -34,4 +33,4 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    asyncio.run(run_mcp(transport=args.transport, port=args.port))
+    run_mcp(transport=args.transport, port=args.port)

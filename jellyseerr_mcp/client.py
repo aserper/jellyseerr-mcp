@@ -51,25 +51,26 @@ class JellyseerrClient:
         return self.request("GET", "search", params={"query": encoded_query})
 
     def request_media(self, media_id: int, media_type: str, is_4k: bool = False) -> Any:
-        # Discover media details to find the correct media ID to request
-        media_details = self.request("GET", f"{media_type}/{media_id}")
+        # Look up the service (radarr/sonarr) to get serverId, profileId, and rootFolder
+        service_type = "radarr" if media_type == "movie" else "sonarr"
+        services = self.request("GET", f"service/{service_type}")
 
-        # Jellyseerr API requests are complex. We need to find the service `id` for the desired quality.
-        # This is a simplified example; a real implementation would need to handle seasons, etc.
-        service_slug = "radarr" if media_type == "movie" else "sonarr"
-        if is_4k:
-            service_slug += "_4k"
-
-        service = next((s for s in media_details.get("services", []) if s.get("slug") == service_slug), None)
+        # Handle both list and single-object responses
+        if isinstance(services, list):
+            service = next((s for s in services if s.get("is4k") == is_4k), services[0] if services else None)
+        else:
+            service = services
 
         if not service:
-            raise ValueError(f"Could not find a service matching slug '{service_slug}' for media_id {media_id}")
+            raise ValueError(f"No {service_type} service configured in Jellyseerr")
 
         payload = {
-            "mediaId": media_details["id"],
+            "mediaId": media_id,
             "mediaType": media_type,
             "is4k": is_4k,
-            "serverId": service["id"],
+            "serverId": service.get("id", 0),
+            "profileId": service.get("activeProfileId"),
+            "rootFolder": service.get("activeDirectory"),
         }
         return self.request("POST", "request", json=payload)
 
