@@ -40,7 +40,7 @@ def test_request_media_success(mock_client):
     result = request_media(media_id=123, media_type="movie")
     
     assert result == expected_data
-    mock_client.request_media.assert_called_once_with(media_id=123, media_type="movie")
+    mock_client.request_media.assert_called_once_with(media_id=123, media_type="movie", seasons=None)
 
 def test_get_request_success(mock_client):
     expected_data = {"id": 1, "media": {"title": "Test Movie"}}

@@ -43,7 +43,7 @@ def test_search_media_integration(setup_teardown_client):
     # Verify httpx call
     setup_teardown_client.request.assert_called_with(
         "GET",
-        "http://integration.test/api/v1/search",
-        params={"query": "Integration+Mov"},
+        "http://integration.test/api/v1/search?query=Integration%20Mov",
+        params=None,
         json=None
     )

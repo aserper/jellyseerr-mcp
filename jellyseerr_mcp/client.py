@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import httpx
 from typing import Any, Dict, Optional
-from urllib.parse import quote_plus
 
 from .config import AppConfig
 
@@ -45,12 +44,22 @@ class JellyseerrClient:
 
 
     # Convenience methods for common operations
-    def search_media(self, query: str, limit: int = 20) -> Any:
-        # URL encode the query to handle spaces and special characters
-        encoded_query = quote_plus(query)
-        return self.request("GET", "search", params={"query": encoded_query})
+    def search_media(self, query: str) -> Any:
+        # Jellyseerr requires URL-encoded query params and rejects '+'
+        # (httpx encodes spaces as '+' in params, which the API rejects).
+        # Use quote() to get %20 encoding and embed directly in the URL
+        # so httpx doesn't re-encode.
+        from urllib.parse import quote
+        encoded = quote(query, safe="")
+        return self.request("GET", f"search?query={encoded}")
 
-    def request_media(self, media_id: int, media_type: str, is_4k: bool = False) -> Any:
+    def request_media(
+        self,
+        media_id: int,
+        media_type: str,
+        is_4k: bool = False,
+        seasons: Optional[list[int]] = None,
+    ) -> Any:
         # Look up the service (radarr/sonarr) to get serverId, profileId, and rootFolder
         service_type = "radarr" if media_type == "movie" else "sonarr"
         services = self.request("GET", f"service/{service_type}")
@@ -72,6 +81,12 @@ class JellyseerrClient:
             "profileId": service.get("activeProfileId"),
             "rootFolder": service.get("activeDirectory"),
         }
+
+        # TV shows require seasons array (Jellyseerr v3.3.0 bug) and languageProfileId
+        if media_type == "tv":
+            payload["seasons"] = seasons or [1]
+            payload["languageProfileId"] = service.get("activeLanguageProfileId", 7)
+
         return self.request("POST", "request", json=payload)
 
     def get_request(self, request_id: int) -> Any:

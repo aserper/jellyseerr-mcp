@@ -59,8 +59,8 @@ def test_search_media(mock_config, mock_httpx_client):
     
     mock_instance.request.assert_called_with(
         "GET", 
-        "http://test.local/api/v1/search", 
-        params={"query": "Test+Movie"}, 
+        "http://test.local/api/v1/search?query=Test%20Movie", 
+        params=None, 
         json=None
     )
 

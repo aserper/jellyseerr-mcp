@@ -34,11 +34,11 @@ def search_media(query: str) -> Any:
     return data
 
 
-@mcp.tool(description="Create a media request in Jellyseerr.")
-def request_media(media_id: int, media_type: str) -> Any:
+@mcp.tool(description="Create a media request in Jellyseerr. For TV shows, optionally specify seasons (default: [1]).")
+def request_media(media_id: int, media_type: str, seasons: list[int] | None = None) -> Any:
     logger.info(f"📥 Requesting media id={media_id} type={media_type}")
     assert _client is not None
-    data = _client.request_media(media_id=media_id, media_type=media_type)
+    data = _client.request_media(media_id=media_id, media_type=media_type, seasons=seasons)
     logger.info("✅ Request created")
     return data
 
