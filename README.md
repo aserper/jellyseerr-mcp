@@ -1,5 +1,7 @@
 # ArrChestra
 
+![ArrChestra retro-CRT banner](header.png)
+
 An MCP server for **Seerr/Jellyseerr, Sonarr, Radarr, NZBGet, SABnzbd and NZBHydra2**. Connect it to an MCP client to request media, manage monitoring, inspect failed acquisitions and control downloads.
 
 Configure only the services you use. ArrChestra starts read-only, checks permissions before making changes, and leaves scheduling to your existing tools.
