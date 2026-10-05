@@ -1,93 +1,77 @@
+"""Backward-compatible Jellyseerr/Seerr tools with explicit mutation policy."""
 from __future__ import annotations
 
+from typing import Any
+from urllib.parse import quote
+
 import httpx
-from typing import Any, Dict, Optional
 
-from .config import AppConfig
-
-
-class JellyseerrClient:
-    def __init__(self, config: AppConfig):
-        self._base_url = f"{config.jellyseerr_url}/api/v1"
-        self._timeout = config.timeout
-        self._headers = {
-            "X-Api-Key": config.jellyseerr_api_key,
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        }
-
-        # Synchronous client
-        self._client = httpx.Client(headers=self._headers, timeout=self._timeout)
-
-    def close(self) -> None:
-        if self._client is not None:
-            self._client.close()
-
-    def request(
-        self,
-        method: str,
-        endpoint: str,
-        *,
-        params: Optional[Dict[str, Any]] = None,
-        json: Optional[Dict[str, Any]] = None,
-    ) -> Any:
-        url = f"{self._base_url}/{endpoint.lstrip('/')}"
-        try:
-            resp = self._client.request(method.upper(), url, params=params or None, json=json or None)
-            resp.raise_for_status()
-            return resp.json()
-        except httpx.HTTPStatusError as e:
-            detail = e.response.text
-            raise RuntimeError(f"Jellyseerr API error for '{e.request.method} {e.request.url}': {e.response.status_code} - {detail}") from e
-        except httpx.RequestError as e:
-            raise RuntimeError(f"Jellyseerr connection error for '{e.request.method} {e.request.url}': {e}") from e
+from .config import AppConfig, ServiceConfig
+from .http import ServiceClient, positive_id
 
 
-    # Convenience methods for common operations
-    def search_media(self, query: str) -> Any:
-        # Jellyseerr requires URL-encoded query params and rejects '+'
-        # (httpx encodes spaces as '+' in params, which the API rejects).
-        # Use quote() to get %20 encoding and embed directly in the URL
-        # so httpx doesn't re-encode.
-        from urllib.parse import quote
-        encoded = quote(query, safe="")
-        return self.request("GET", f"search?query={encoded}")
+class JellyseerrClient(ServiceClient):
+    def __init__(self, config: AppConfig | ServiceConfig, transport: httpx.BaseTransport | None = None):
+        if isinstance(config, AppConfig):
+            config = config.service_configs()["jellyseerr"]
+        super().__init__(config, transport=transport)
 
-    def request_media(
-        self,
-        media_id: int,
-        media_type: str,
-        is_4k: bool = False,
-        seasons: Optional[list[int]] = None,
-    ) -> Any:
-        # Look up the service (radarr/sonarr) to get serverId, profileId, and rootFolder
+    def request(self, method: str, endpoint: str, *, params: dict | None = None,
+                json: dict | None = None) -> Any:
+        method = method.upper()
+        if method not in {"GET", "POST", "PUT"}:
+            raise ValueError("Unsupported service method")
+        return self.request_json(method, "api/v1/" + endpoint.lstrip("/"),
+                                 params=params, json=json, mutation=method != "GET")
+
+    def search_media(self, query: str) -> dict:
+        if not query.strip() or len(query) > 500:
+            raise ValueError("query must contain 1 to 500 characters")
+        # Preserve %20: Seerr rejects httpx's conventional '+' encoding.
+        return self.request("GET", "search?query=" + quote(query, safe=""))
+
+    def request_media(self, media_id: int, media_type: str, is_4k: bool = False,
+                      seasons: list[int] | None = None) -> dict:
+        self.require_write()
+        media_id = positive_id(media_id, "media_id")
+        if media_type not in {"movie", "tv"}:
+            raise ValueError("media_type must be movie or tv")
+        if seasons is not None and (media_type != "tv" or not seasons or len(seasons) > 100
+                or any(isinstance(s, bool) or not isinstance(s, int) or s < 0 for s in seasons)):
+            raise ValueError("seasons must be a nonempty list of TV season numbers")
         service_type = "radarr" if media_type == "movie" else "sonarr"
-        services = self.request("GET", f"service/{service_type}")
-
-        # Handle both list and single-object responses
-        if isinstance(services, list):
-            service = next((s for s in services if s.get("is4k") == is_4k), services[0] if services else None)
+        services = self.request("GET", "service/" + service_type)
+        if isinstance(services, dict):
+            services = [services]
+        matches = [s for s in (services or []) if bool(s.get("is4k", False)) == is_4k]
+        default = [s for s in matches if s.get("isDefault")]
+        if len(default) == 1:
+            service = default[0]
+        elif len(matches) == 1:
+            service = matches[0]
         else:
-            service = services
-
-        if not service:
-            raise ValueError(f"No {service_type} service configured in Jellyseerr")
-
-        payload = {
-            "mediaId": media_id,
-            "mediaType": media_type,
-            "is4k": is_4k,
-            "serverId": service.get("id", 0),
-            "profileId": service.get("activeProfileId"),
-            "rootFolder": service.get("activeDirectory"),
-        }
-
-        # TV shows require seasons array (Jellyseerr v3.3.0 bug) and languageProfileId
+            raise ValueError(f"Configure one default {service_type} service for this quality in Seerr")
+        if not service.get("activeProfileId") or not service.get("activeDirectory"):
+            raise ValueError("Seerr service needs an active quality profile and root directory")
+        payload = {"mediaId": media_id, "mediaType": media_type, "is4k": is_4k,
+                   "serverId": positive_id(service.get("id"), "server_id"),
+                   "profileId": service["activeProfileId"], "rootFolder": service["activeDirectory"]}
         if media_type == "tv":
-            payload["seasons"] = seasons or [1]
-            payload["languageProfileId"] = service.get("activeLanguageProfileId", 7)
-
+            # Legacy default retained. Explicit empty seasons is not silently rewritten.
+            payload["seasons"] = sorted(set(seasons)) if seasons is not None else [1]
+            language = service.get("activeLanguageProfileId")
+            if language is not None:
+                payload["languageProfileId"] = language
         return self.request("POST", "request", json=payload)
 
-    def get_request(self, request_id: int) -> Any:
-        return self.request("GET", f"request/{request_id}")
+    def get_request(self, request_id: int) -> dict:
+        return self.request("GET", f"request/{positive_id(request_id, 'request_id')}")
+
+    def raw_read(self, method: str, endpoint: str, params: dict | None = None,
+                 body: dict | None = None) -> dict:
+        # Compatibility escape hatch is inspection-only, even in operator mode.
+        if method.upper() != "GET" or body is not None or params:
+            raise PermissionError("raw_request permits allowlisted GET endpoints without body/params only")
+        if endpoint not in {"status", "/status"}:
+            raise PermissionError("raw_request endpoint is not allowlisted")
+        return self.request("GET", "status")
