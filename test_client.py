@@ -1,31 +1,22 @@
-import httpx
+"""Manual stdio smoke check: initialize, discover tools and ping, no backend calls."""
 import asyncio
+import os
+import sys
+
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
 
 async def main():
-    session_id = None
-    async with httpx.AsyncClient() as client:
-        async with client.stream("GET", "http://127.0.0.1:8797/sse") as response:
-            async for line in response.aiter_lines():
-                if line.startswith("data:"):
-                    session_id = line.split("session_id=")[1]
-                    break
-        
-        print(f"Session ID: {session_id}")
+    params = StdioServerParameters(command=sys.executable, args=["-m", "arrchestra_mcp"], env=dict(os.environ))
+    async with stdio_client(params) as (read, write):
+        async with ClientSession(read, write) as session:
+            info = await session.initialize()
+            tools = await session.list_tools()
+            ping = await session.call_tool("ping", {})
+            print(f"Connected to {info.serverInfo.name}: {len(tools.tools)} tools")
+            print("Ping failed" if ping.isError else "Ping OK")
 
-        if session_id:
-            response = await client.post(
-                f"http://127.0.0.1:8797/messages/?session_id={session_id}",
-                json={
-                    "jsonrpc": "2.0",
-                    "method": "tools/call",
-                    "params": {
-                        "name": "ping",
-                        "arguments": {}
-                    },
-                    "id": 1
-                }
-            )
-            print(response.text)
 
 if __name__ == "__main__":
     asyncio.run(main())

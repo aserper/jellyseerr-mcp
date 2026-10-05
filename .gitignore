@@ -103,6 +103,8 @@ celerybeat.pid
 
 # Environments
 .env
+.env.*
+!.env.example
 .venv
 env/
 venv/
@@ -131,5 +133,7 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
-#Claude
+# Local agent configuration, transcripts and task state
+.pi/
+.claude/
 CLAUDE.md

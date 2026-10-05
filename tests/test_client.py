@@ -1,81 +1,58 @@
+import json
+
+import httpx
 import pytest
-from unittest.mock import MagicMock, patch
+
 from jellyseerr_mcp.client import JellyseerrClient
-from jellyseerr_mcp.config import AppConfig
+from jellyseerr_mcp.config import AppConfig, ServiceConfig
 
-@pytest.fixture
-def mock_config():
-    return AppConfig(
-        jellyseerr_url="http://test.local",
-        jellyseerr_api_key="test-api-key",
-        timeout=10.0,
-        auth_issuer_url=None,
-        auth_resource_server_url=None,
-        auth_required_scopes=None,
-    )
 
-@pytest.fixture
-def mock_httpx_client():
-    with patch("jellyseerr_mcp.client.httpx.Client") as mock:
-        yield mock
+def test_client_and_search_encoding():
+    requests = []
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(200, json={'results': []})
+    client = JellyseerrClient(AppConfig(jellyseerr_url='https://test.local', jellyseerr_api_key='test-api-key'),
+                            httpx.MockTransport(handler))
+    assert client.search_media('Test Movie & café') == {'results': []}
+    assert str(requests[0].url) == 'https://test.local/api/v1/search?query=Test%20Movie%20%26%20caf%C3%A9'
+    assert requests[0].headers['X-Api-Key'] == 'test-api-key'
+    client.close()
+    assert client._http.is_closed
 
-def test_client_init(mock_config, mock_httpx_client):
-    client = JellyseerrClient(mock_config)
-    
-    assert client._base_url == "http://test.local/api/v1"
-    assert client._timeout == 10.0
-    mock_httpx_client.assert_called_with(
-        headers={
-            "X-Api-Key": "test-api-key",
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        },
-        timeout=10.0
-    )
 
-def test_request_success(mock_config, mock_httpx_client):
-    # Setup mock
-    mock_response = MagicMock()
-    mock_response.json.return_value = {"ok": True}
-    mock_response.raise_for_status.return_value = None
-    
-    mock_instance = mock_httpx_client.return_value
-    mock_instance.request.return_value = mock_response
-    
-    client = JellyseerrClient(mock_config)
-    result = client.request("GET", "test")
-    
-    assert result == {"ok": True}
-    mock_instance.request.assert_called_with("GET", "http://test.local/api/v1/test", params=None, json=None)
+def test_get_request_details():
+    def handler(request):
+        assert request.url.path == '/api/v1/request/123'
+        return httpx.Response(200, json={'id':123})
+    client = JellyseerrClient(ServiceConfig('jellyseerr','https://test.local'), httpx.MockTransport(handler))
+    assert client.get_request(123) == {'id':123}
+    client.close()
 
-def test_search_media(mock_config, mock_httpx_client):
-    mock_response = MagicMock()
-    mock_response.json.return_value = {"results": []}
-    mock_instance = mock_httpx_client.return_value
-    mock_instance.request.return_value = mock_response
-    
-    client = JellyseerrClient(mock_config)
-    client.search_media("Test Movie")
-    
-    mock_instance.request.assert_called_with(
-        "GET", 
-        "http://test.local/api/v1/search?query=Test%20Movie", 
-        params=None, 
-        json=None
-    )
 
-def test_get_request_details(mock_config, mock_httpx_client):
-    mock_response = MagicMock()
-    mock_response.json.return_value = {"id": 1}
-    mock_instance = mock_httpx_client.return_value
-    mock_instance.request.return_value = mock_response
-    
-    client = JellyseerrClient(mock_config)
-    client.get_request(123)
-    
-    mock_instance.request.assert_called_with(
-        "GET", 
-        "http://test.local/api/v1/request/123", 
-        params=None, 
-        json=None
-    )
+def test_tv_request_does_not_invent_language_profile_or_seasons():
+    sent = []
+    def handler(request):
+        if request.method == 'GET':
+            return httpx.Response(200, json=[{'id':1,'is4k':False,'isDefault':True,
+                'activeProfileId':4,'activeDirectory':'/tv'}])
+        sent.append(json.loads(request.content))
+        return httpx.Response(201, json={'id':9,'status':'pending'})
+    client = JellyseerrClient(ServiceConfig('jellyseerr','https://test.local',allow_writes=True),httpx.MockTransport(handler))
+    assert client.request_media(123,'tv',seasons=[3,1,3])['id'] == 9
+    assert sent[0]['seasons'] == [1,3]
+    assert 'languageProfileId' not in sent[0]
+    with pytest.raises(ValueError):
+        client.request_media(123,'tv',seasons=[])
+    client.close()
+
+
+def test_permissions_before_network_and_raw_allowlist():
+    client = JellyseerrClient(ServiceConfig('jellyseerr','https://test.local'),
+                             httpx.MockTransport(lambda request: pytest.fail('network call')))
+    with pytest.raises(PermissionError):
+        client.request_media(1,'movie')
+    for method,endpoint in [('DELETE','request/1'),('GET','settings/main'),('POST','status')]:
+        with pytest.raises(PermissionError):
+            client.raw_read(method,endpoint)
+    client.close()

@@ -1,50 +1,133 @@
+"""Environment-only configuration. Secrets are never represented in diagnostics."""
 from __future__ import annotations
 
+import math
 import os
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from pathlib import Path
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
+
+SERVICES = ("jellyseerr", "radarr", "sonarr", "nzbget", "sabnzbd", "nzbhydra")
+
+
+def validate_url(value: str, label: str = "URL") -> str:
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        raise ValueError(f"{label} is invalid") from None
+    if (parsed.scheme not in {"http", "https"} or not parsed.hostname
+            or parsed.username is not None or parsed.password is not None
+            or parsed.query or parsed.fragment or any(c.isspace() for c in value)
+            or "\\" in value or "%" in parsed.netloc
+            or any(part in {".", ".."} for part in parsed.path.split("/"))
+            or (port is not None and not 1 <= port <= 65535)):
+        raise ValueError(f"{label} must be an HTTP(S) base URL without credentials, query or fragment")
+    return value.rstrip("/")
+
+
+def origin(value: str) -> str:
+    parsed = urlsplit(validate_url(value))
+    hostname = parsed.hostname or ""
+    host = f"[{hostname}]" if ":" in hostname else hostname
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    return f"{parsed.scheme}://{host}:{port}"
+
+
+def boolean(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    if value.lower() not in {"true", "false"}:
+        raise ValueError(f"{name} must be true or false")
+    return value.lower() == "true"
+
+
+def timeout(name: str, default: float) -> float:
+    try:
+        value = float(os.getenv(name, str(default)))
+    except ValueError:
+        raise ValueError(f"{name} must be a positive finite number") from None
+    if not math.isfinite(value) or not 0 < value <= 300:
+        raise ValueError(f"{name} must be between 0 and 300 seconds")
+    return value
+
+
+@dataclass(frozen=True)
+class ServiceConfig:
+    name: str
+    url: str
+    api_key: str = field(default="", repr=False)
+    username: str = field(default="", repr=False)
+    password: str = field(default="", repr=False)
+    timeout: float = 15.0
+    allow_writes: bool = False
+    allowed_redirect_origins: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.name not in SERVICES:
+            raise ValueError("Unknown service")
+        object.__setattr__(self, "url", validate_url(self.url, f"{self.name} URL"))
+        if not math.isfinite(self.timeout) or not 0 < self.timeout <= 300:
+            raise ValueError("Service timeout must be positive and finite, at most 300 seconds")
+        for credential in (self.api_key, self.username, self.password):
+            if any(ord(c) < 32 or ord(c) == 127 for c in credential):
+                raise ValueError("Credentials must not contain control characters")
+        if any(urlsplit(validate_url(u)).path not in {"", "/"} for u in self.allowed_redirect_origins):
+            raise ValueError("Redirect allowlist must contain origins, not paths")
+        object.__setattr__(self, "allowed_redirect_origins", tuple(origin(u) for u in self.allowed_redirect_origins))
 
 
 @dataclass
 class AppConfig:
-    jellyseerr_url: str
-    jellyseerr_api_key: str
+    # Legacy constructor/variable compatibility; new installations need no Seerr.
+    jellyseerr_url: str = ""
+    jellyseerr_api_key: str = field(default="", repr=False)
     timeout: float = 15.0
-    # Auth config for SSE
-    auth_issuer_url: Optional[str] = None
-    auth_resource_server_url: Optional[str] = None
-    auth_required_scopes: Optional[list[str]] = None
+    auth_issuer_url: str | None = None
+    auth_resource_server_url: str | None = None
+    auth_required_scopes: list[str] | None = None
+    services: dict[str, ServiceConfig] = field(default_factory=dict)
+    read_only: bool = True
+    allow_raw_read: bool = False
+
+    def service_configs(self) -> dict[str, ServiceConfig]:
+        configs = dict(self.services)
+        if any(name != conf.name for name, conf in configs.items()):
+            raise ValueError("Service configuration names do not match their registry keys")
+        if self.jellyseerr_url and "jellyseerr" not in configs:
+            configs["jellyseerr"] = ServiceConfig("jellyseerr", self.jellyseerr_url,
+                api_key=self.jellyseerr_api_key, timeout=self.timeout)
+        if self.read_only:
+            from dataclasses import replace
+            configs = {name: replace(conf, allow_writes=False) for name, conf in configs.items()}
+        return configs
 
 
 def load_config() -> AppConfig:
-    load_dotenv()
-
-    url = os.getenv("JELLYSEERR_URL", "").strip()
-    api_key = os.getenv("JELLYSEERR_API_KEY", "").strip()
-    timeout_str: Optional[str] = os.getenv("JELLYSEERR_TIMEOUT")
-
-    auth_issuer_url = os.getenv("MCP_AUTH_ISSUER_URL")
-    auth_resource_server_url = os.getenv("MCP_AUTH_RESOURCE_SERVER_URL")
-    auth_scopes_str = os.getenv("MCP_AUTH_REQUIRED_SCOPES")
-    auth_required_scopes = auth_scopes_str.split(",") if auth_scopes_str else None
-
-    if not url or not api_key:
-        raise RuntimeError(
-            "Missing configuration. Please set JELLYSEERR_URL and JELLYSEERR_API_KEY (tip: copy .env.example)."
-        )
-
-    try:
-        timeout = float(timeout_str) if timeout_str else 15.0
-    except ValueError:
-        timeout = 15.0
-
-    return AppConfig(
-        jellyseerr_url=url.rstrip("/"),
-        jellyseerr_api_key=api_key,
-        timeout=timeout,
-        auth_issuer_url=auth_issuer_url,
-        auth_resource_server_url=auth_resource_server_url,
-        auth_required_scopes=auth_required_scopes,
-    )
+    # Explicit process environment wins over .env; no credentials from MCP callers.
+    load_dotenv(dotenv_path=Path.cwd() / ".env", override=False)
+    common_timeout = timeout("MCP_REQUEST_TIMEOUT", 15.0)
+    read_only = boolean("MCP_READ_ONLY", True)
+    configs: dict[str, ServiceConfig] = {}
+    for name in SERVICES:
+        prefix = name.upper()
+        required = ("URL", "USERNAME", "PASSWORD") if name == "nzbget" else ("URL", "API_KEY")
+        values = {key: os.getenv(f"{prefix}_{key}", "").strip() for key in required}
+        if not any(values.values()):
+            continue
+        missing = [f"{prefix}_{key}" for key, value in values.items() if not value]
+        if missing:
+            raise ValueError("Incomplete service configuration: " + ", ".join(missing))
+        redirects = tuple(u.strip() for u in os.getenv("NZBHYDRA_ALLOWED_REDIRECT_ORIGINS", "").split(",") if u.strip()) if name == "nzbhydra" else ()
+        configs[name] = ServiceConfig(name, values["URL"],
+            api_key=values.get("API_KEY", ""), username=values.get("USERNAME", ""),
+            password=values.get("PASSWORD", ""), timeout=timeout(f"{prefix}_TIMEOUT", common_timeout),
+            allow_writes=boolean(f"{prefix}_ALLOW_WRITES") and not read_only,
+            allowed_redirect_origins=redirects)
+    if not configs:
+        raise ValueError("Configure at least one service URL and its credentials (see .env.example)")
+    return AppConfig(services=configs, timeout=common_timeout, read_only=read_only,
+        allow_raw_read=boolean("MCP_ALLOW_RAW_READ"))
