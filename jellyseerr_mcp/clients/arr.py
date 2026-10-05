@@ -219,6 +219,9 @@ class RadarrClient(ArrClientBase):
         """Fresh interactive release search for one movie (quota-consuming upstream)."""
         movie_id = positive_id(movie_id, 'movie_id')
         pagination(offset, limit)
+        # Radarr answers 500 for an unknown movieId, so check locally first.
+        if self.request_json('GET', f'api/v3/movie/{movie_id}') is None:
+            raise ValueError(f'radarr movie {movie_id} not found')
         releases = self._release_search({'movieId': movie_id})
         return page([self._project_release(r) for r in releases], offset, limit)
 
@@ -277,6 +280,9 @@ class RadarrClient(ArrClientBase):
             raise ValueError('guid must be a non-empty string')
         if len(guid) > 2048:
             raise ValueError('guid must be at most 2048 characters')
+        # Radarr answers 500 for an unknown movieId, so check locally first.
+        if self.request_json('GET', f'api/v3/movie/{movie_id}') is None:
+            raise ValueError(f'radarr movie {movie_id} not found')
         releases = self._release_search({'movieId': movie_id})
         match = self._release_matches(releases, guid, indexer_id)
         if match is None:
@@ -372,6 +378,15 @@ class SonarrClient(ArrClientBase):
     def health(self) -> list[dict]:
         return self._health()
 
+    def _require_series(self, series_id: int) -> None:
+        """Fail with a clear error before the indexer fan-out.
+
+        Sonarr answers 500 for an unknown seriesId instead of 404, so an unknown
+        series would otherwise surface as an opaque upstream error.
+        """
+        if not self.request_json('GET', f'api/v3/series/{series_id}'):
+            raise ValueError(f'sonarr series {series_id} not found')
+
     def _require_series_episode(self, series_id: int, episode_id: int) -> None:
         found = self.request_json('GET', f'api/v3/episode/{episode_id}') or {}
         if not found or found.get('seriesId') != series_id:
@@ -391,8 +406,9 @@ class SonarrClient(ArrClientBase):
             self._require_series_episode(series_id, episode_id)
             params = {'episodeId': episode_id}
         elif season_number is not None:
-            params = {'seriesId': series_id,
-                      'seasonNumber': _season_number(season_number)}
+            season = _season_number(season_number)  # validate before any network
+            self._require_series(series_id)
+            params = {'seriesId': series_id, 'seasonNumber': season}
         else:
             raise ValueError('episode_id or season_number is required; '
                              'the Sonarr API does not search releases for a series alone')
@@ -547,8 +563,9 @@ class SonarrClient(ArrClientBase):
             self._require_series_episode(series_id, episode_id)
             params = {'episodeId': episode_id}
         elif season_number is not None:
-            params = {'seriesId': series_id,
-                      'seasonNumber': _season_number(season_number)}
+            season = _season_number(season_number)  # validate before any network
+            self._require_series(series_id)
+            params = {'seriesId': series_id, 'seasonNumber': season}
         else:
             raise ValueError('episode_id or season_number is required to requery releases')
         releases = self._release_search(params)
