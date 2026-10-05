@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from jellyseerr_mcp.config import AppConfig, SERVICES, ServiceConfig, load_config
+from jellyseerr_mcp.clients.arr import RadarrClient
 from jellyseerr_mcp.http import ServiceClient, ServiceError, positive_id, validate_nzb
 
 
@@ -13,7 +14,8 @@ def clean_env(monkeypatch):
     for service in SERVICES:
         for suffix in ('URL', 'API_KEY', 'USERNAME', 'PASSWORD', 'TIMEOUT', 'ALLOW_WRITES'):
             monkeypatch.delenv(service.upper() + '_' + suffix, raising=False)
-    for name in ('MCP_REQUEST_TIMEOUT', 'MCP_READ_ONLY', 'MCP_ALLOW_RAW_READ', 'NZBHYDRA_ALLOWED_REDIRECT_ORIGINS'):
+    for name in ('MCP_REQUEST_TIMEOUT', 'MCP_READ_ONLY', 'MCP_ALLOW_RAW_READ', 'MCP_SEARCH_TIMEOUT',
+                 'NZBHYDRA_ALLOWED_REDIRECT_ORIGINS'):
         monkeypatch.delenv(name, raising=False)
     return monkeypatch
 
@@ -48,6 +50,43 @@ def test_invalid_timeout(clean_env, value):
         load_config()
 
 
+def configured(clean_env, **env):
+    clean_env.setenv('RADARR_URL', 'https://radarr.test')
+    clean_env.setenv('RADARR_API_KEY', 'api-secret')
+    for key, value in env.items():
+        clean_env.setenv(key, value)
+    return load_config().service_configs()
+
+
+def test_search_timeout_defaults_and_overrides(clean_env):
+    assert configured(clean_env)['radarr'].search_timeout == 120.0
+    clean_env.setenv('MCP_SEARCH_TIMEOUT', '200')
+    assert configured(clean_env)['radarr'].search_timeout == 200.0
+    clean_env.setenv('RADARR_SEARCH_TIMEOUT', '45')
+    assert configured(clean_env)['radarr'].search_timeout == 45.0  # per-service wins
+
+
+def test_search_timeout_ignores_prefixes_for_services_without_indexer_fanout(clean_env):
+    clean_env.setenv('NZBGET_URL', 'https://nzbget.test')
+    clean_env.setenv('NZBGET_USERNAME', 'user')
+    clean_env.setenv('NZBGET_PASSWORD', 'password-secret')
+    clean_env.setenv('NZBGET_SEARCH_TIMEOUT', '45')
+    services = configured(clean_env)
+    assert services['radarr'].search_timeout == 120.0  # shared default, not the stray value
+    assert services['nzbget'].search_timeout == 120.0  # a stray override is ignored
+
+
+def test_search_timeout_zero_disables_the_bound(clean_env):
+    assert configured(clean_env, MCP_SEARCH_TIMEOUT='0')['radarr'].search_timeout == 0.0
+    assert configured(clean_env, RADARR_SEARCH_TIMEOUT='0')['radarr'].search_timeout == 0.0
+
+
+@pytest.mark.parametrize('value', ['nan', 'inf', '-1', '301', 'bad'])
+def test_invalid_search_timeout(clean_env, value):
+    with pytest.raises(ValueError, match='SEARCH_TIMEOUT'):
+        configured(clean_env, RADARR_SEARCH_TIMEOUT=value)
+
+
 def test_write_optins(clean_env):
     clean_env.setenv('SONARR_URL', 'https://example.test')
     clean_env.setenv('SONARR_API_KEY', 'secret')
@@ -68,6 +107,47 @@ def test_write_optins(clean_env):
 def test_invalid_urls(url):
     with pytest.raises(ValueError):
         ServiceConfig('sonarr', url)
+
+
+def test_timeout_can_be_disabled_and_read_timeout_honors_a_per_request_deadline(clean_env):
+    """search_timeout=0 disables the bound; the per-request deadline is enforced.
+
+    Uses a real listening socket that accepts and never answers, because an
+    httpx.MockTransport is handed an already-complete response and can never
+    raise ReadTimeout.
+    """
+    import socket
+    import threading
+    import time as time_module
+
+    listener = socket.socket()
+    listener.bind(('127.0.0.1', 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+
+    def accept_forever():
+        while True:
+            try:
+                connection, _ = listener.accept()
+            except OSError:
+                return
+            connection.recv(4096)  # read the request, then stall without replying
+
+    threading.Thread(target=accept_forever, daemon=True).start()
+    clean_env.setenv('RADARR_URL', f'http://127.0.0.1:{port}')
+    clean_env.setenv('RADARR_API_KEY', 'api-secret')
+    clean_env.setenv('MCP_SEARCH_TIMEOUT', '0')
+    clean_env.setenv('MCP_REQUEST_TIMEOUT', '1')
+    try:
+        client = RadarrClient(load_config().service_configs()['radarr'])
+        started = time_module.monotonic()
+        with pytest.raises(ServiceError, match='timed out'):
+            client.releases(1)
+        elapsed = time_module.monotonic() - started
+        client.close()
+    finally:
+        listener.close()
+    assert 0.5 < elapsed < 3.0  # ~1s deadline: not instant, not the 120s default
 
 
 def test_safe_http_errors_and_no_retry():

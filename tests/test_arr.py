@@ -704,3 +704,44 @@ def test_sonarr_mutations_permission_checked_before_any_network():
             call()
     assert api.calls == []  # permission gate precedes preflight reads too
     client.close()
+
+
+# ------------------------------------------------- target search deadline
+
+
+def test_target_search_uses_search_deadline_and_metadata_uses_request_deadline():
+    """Only target search carries the longer deadline; metadata keeps the short one.
+
+    Regression for live release searches failing with "request timed out": the
+    deadline is per operation, not per service. Asserted on the deadline actually
+    handed to the transport, because MockTransport cannot model socket timeouts.
+    """
+    client, api = make_client(RadarrClient, RADARR, [
+        (r'/api/v3/release', 'GET', lambda req: (200, [release()])),
+        (r'/api/v3/movie/1', 'GET', lambda req: (200, movie(1)))])
+    config = ServiceConfig('radarr', RADARR, api_key='secret-key-1', timeout=15.0,
+                           allow_writes=True, search_timeout=120.0)
+    client.close()
+    client = RadarrClient(config, transport=api.transport())
+    client.releases(1, limit=1)
+    assert api.calls[0].extensions['timeout'] == {'connect': 120.0, 'read': 120.0,
+                                                  'write': 120.0, 'pool': 120.0}
+    client.get(1)
+    assert api.calls[1].extensions['timeout']['read'] == 15.0  # client default, not the search budget
+    client.close()
+
+
+def test_grab_requery_uses_the_search_deadline():
+    """grab() requeries releases first, so it must not inherit the short deadline."""
+    client, api = make_client(RadarrClient, RADARR, [
+        (r'/api/v3/release', 'GET', lambda req: (200, [release()])),
+        (r'/api/v3/release', 'POST', lambda req: (200, release()))])
+    config = ServiceConfig('radarr', RADARR, api_key='secret-key-1', timeout=15.0,
+                           allow_writes=True, search_timeout=120.0)
+    client.close()
+    client = RadarrClient(config, transport=api.transport())
+    assert client.grab(1, 'guid-1', 3)['grabbed'] is True
+    assert api.calls[0].method == 'GET'
+    assert api.calls[0].extensions['timeout']['read'] == 120.0
+    assert api.calls[1].extensions['timeout']['read'] == 15.0  # mutation keeps the default
+    client.close()
