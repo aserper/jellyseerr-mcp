@@ -780,3 +780,123 @@ def test_grab_requery_uses_the_search_deadline():
     assert api.calls[1].extensions['timeout']['read'] == 120.0
     assert api.calls[2].extensions['timeout']['read'] == 15.0  # mutation keeps the default
     client.close()
+
+
+# ------------------------------------------------------------- calendar reads
+
+def test_radarr_calendar_uses_explicit_window_and_local_paging():
+    movies = [movie(i, title=f'Movie {i}', digitalRelease='2026-10-06T00:00:00Z')
+              for i in range(1, 6)]
+    client, api = make_client(RadarrClient, RADARR, [
+        (r'/api/v3/calendar', 'GET', lambda req: (200, movies))])
+    result = client.calendar('2026-10-05', '2026-11-19', offset=1, limit=2)
+    assert api.params(0) == {'start': '2026-10-05', 'end': '2026-11-19'}
+    assert result['pagination'] == 'local' and result['total'] == 5
+    assert [m['id'] for m in result['items']] == [2, 3]
+    assert result['has_more'] is True
+    # Upstream blobs (images, overview, ratings) never leave the client.
+    assert 'overview' not in result['items'][0] and 'images' not in result['items'][0]
+    assert set(result['items'][0]) <= {'id', 'title', 'tmdbId', 'year', 'monitored',
+                                       'hasFile', 'status', 'inCinemas',
+                                       'digitalRelease', 'physicalRelease', 'releaseDate'}
+    client.close()
+
+
+def test_radarr_calendar_accepts_iso_timestamps_and_an_empty_window():
+    client, api = make_client(RadarrClient, RADARR, [
+        (r'/api/v3/calendar', 'GET', lambda req: (200, []))])
+    result = client.calendar('2026-10-05T00:00:00Z', '2026-10-19T00:00:00Z')
+    assert api.params(0) == {'start': '2026-10-05T00:00:00Z', 'end': '2026-10-19T00:00:00Z'}
+    assert result['items'] == [] and result['total'] == 0  # empty is not an error
+    client.close()
+
+
+def test_calendar_window_is_validated_before_any_network_read():
+    client, api = make_client(RadarrClient, RADARR, [
+        (r'/api/v3/calendar', 'GET', lambda req: (200, []))])
+    for start, end, message in [('nonsense', '2026-10-19', 'ISO date'),
+                                ('2026-10-19', '2026-10-05', 'after end'),
+                                ('2026-01-01', '2027-06-01', 'exceed'),
+                                ('2026-10-05', '2026-10-05' * 4, 'ISO date')]:
+        with pytest.raises(ValueError, match=message):
+            client.calendar(start, end)
+    assert not api.calls  # invalid windows never reach the service
+    client.close()
+
+
+def test_sonarr_calendar_projects_series_and_requests_inclusion():
+    record = {'id': 17270, 'seriesId': 49, 'seasonNumber': 3, 'episodeNumber': 2,
+              'title': 'Stanbiscuit', 'airDate': '2026-10-04', 'airDateUtc': '2026-10-05T01:30:00Z',
+              'hasFile': False, 'monitored': True, 'tvdbId': 364826,
+              'series': {'id': 49, 'title': 'Grimsburg', 'status': 'continuing'}}
+    client, api = make_client(SonarrClient, SONARR, [
+        (r'/api/v3/calendar', 'GET', lambda req: (200, [record]))])
+    result = client.calendar('2026-10-05', '2026-10-19')
+    assert api.params(0) == {'start': '2026-10-05', 'end': '2026-10-19', 'includeSeries': 'true'}
+    item = result['items'][0]
+    assert item['seriesTitle'] == 'Grimsburg' and item['airDate'] == '2026-10-04'
+    assert item['seasonNumber'] == 3 and item['episodeNumber'] == 2
+    assert 'series' not in item  # the sub-object is projected, not passed through
+    client.close()
+
+
+def test_sonarr_calendar_tolerates_a_missing_series_sub_object():
+    client, api = make_client(SonarrClient, SONARR, [
+        (r'/api/v3/calendar', 'GET', lambda req: (200, [episode(101, series_id=5)]))])
+    result = client.calendar('2026-10-05', '2026-10-19')
+    assert 'seriesTitle' not in result['items'][0]
+    client.close()
+
+
+def test_sonarr_next_up_is_soonest_first_and_drops_past_and_unmonitored():
+    episodes = [episode(103, series_id=5, monitored=True, airDateUtc='2026-11-01T02:00:00Z'),
+                episode(101, series_id=5, monitored=True, airDateUtc='2026-05-01T02:00:00Z'),
+                episode(102, series_id=5, monitored=False, airDateUtc='2026-10-20T02:00:00Z'),
+                episode(104, series_id=5, monitored=True, airDateUtc='2026-10-15T02:00:00Z'),
+                episode(105, series_id=5, monitored=True, airDateUtc=None)]
+    client, api = make_client(SonarrClient, SONARR, [
+        (r'/api/v3/episode', 'GET', lambda req: (200, episodes)),
+        (r'/api/v3/series/5', 'GET', lambda req: (200, series(5)))])
+    result = client.next_up(series_id='5', since='2026-10-05', limit=5)
+    assert api.params(0) == {'seriesId': '5'}
+    assert result['pagination'] == 'local' and result['total'] == 2
+    assert [e['id'] for e in result['items']] == [104, 103]  # ordered by air time
+    with_unmonitored = client.next_up(series_id=5, since='2026-10-05', include_unmonitored=True)
+    assert with_unmonitored['total'] == 3  # the unmonitored 102 joins, dated episodes only
+    with pytest.raises(ValueError, match='series_id'):
+        client.next_up(series_id=-1, since='2026-10-05')
+    with pytest.raises(ValueError, match='ISO date'):
+        client.next_up(series_id=5, since='yesterday')
+    assert len(api.calls) == 2  # invalid input never reaches the service
+    client.close()
+
+
+def test_sonarr_next_up_requires_a_series_before_any_network_read():
+    """Sonarr rejects /api/v3/episode without a seriesId (400), so a call with
+    no series must fail locally instead of producing an opaque upstream error."""
+    client, api = make_client(SonarrClient, SONARR, [
+        (r'/api/v3/episode', 'GET', lambda req: (200, []))])
+    for bad in (None, '', 0, -3, 'abc'):
+        with pytest.raises(ValueError, match='series_id'):
+            client.next_up(bad)
+    assert not api.calls
+    client.close()
+
+
+def test_sonarr_next_up_keeps_the_plain_episode_read():
+    client, api = make_client(SonarrClient, SONARR, [
+        (r'/api/v3/episode', 'GET', lambda req: (200, [
+            episode(101, series_id=5, monitored=True, airDateUtc='2030-01-01T00:00:00Z')]))])
+    result = client.next_up(5)
+    assert api.params(0) == {'seriesId': '5'}  # includeSeries would inflate the payload
+    assert result['total'] == 1 and result['items'][0]['id'] == 101
+    client.close()
+
+
+def test_sonarr_next_up_accepts_an_iso_timestamp_cutoff():
+    client, api = make_client(SonarrClient, SONARR, [
+        (r'/api/v3/episode', 'GET', lambda req: (200, [
+            episode(101, series_id=5, monitored=True, airDateUtc='2026-10-05T01:00:00Z')]))])
+    assert client.next_up(5, since='2026-10-05T01:00:00Z')['total'] == 1  # inclusive
+    assert client.next_up(5, since='2026-10-05T02:00:00Z')['total'] == 0
+    client.close()

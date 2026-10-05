@@ -117,6 +117,7 @@ def build_server(config: AppConfig, clients: dict[str, ServiceClient] | None = N
         "get_health": ("health", "Read service health warnings; does not fix them."),
         "get_releases": ("releases", "Inspect releases and rejection reasons. Search consumes indexer quota, but does not grab."),
         "get_command": ("command", "Inspect an asynchronous command by its native command ID."),
+        "get_calendar": ("calendar", "Inspect scheduled releases in an explicit date window, soonest first. Read-only; an empty window is not an error."),
     }
     for name in ("radarr", "sonarr"):
         if name not in clients:
@@ -138,6 +139,7 @@ def build_server(config: AppConfig, clients: dict[str, ServiceClient] | None = N
                 "find_series": ("find", "Find series in catalog or managed library; use TVDB IDs for additions.", False),
                 "get_series": ("get", "Inspect a series by native Sonarr ID.", False),
                 "get_episodes": ("episodes", "List episodes for a series with native episode IDs.", False),
+                "get_next_up": ("next_up", "List one series' monitored episodes airing on or after `since` (default now), soonest first.", False),
                 "get_missing": ("missing", "Inspect wanted/missing episodes, without launching a search.", False),
                 "add_series": ("add", "Add selected seasons with verified profile/root; no automatic search; bypasses Seerr approvals.", True),
                 "set_monitoring": ("monitor", "Change only explicitly selected series/seasons/episodes; preserve unrelated monitoring.", True),

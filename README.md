@@ -11,8 +11,8 @@ Configure only the services you use. ArrChestra starts read-only, checks permiss
 | Service | Tools cover |
 | --- | --- |
 | Seerr / Jellyseerr | Media search, requests and request status |
-| Radarr | Movie lookup and additions, monitoring, release searches, queue/history and import diagnostics |
-| Sonarr | Series and episode lookup, season monitoring, missing episodes, searches and queue/history |
+| Radarr | Movie lookup and additions, monitoring, release calendars, release searches, queue/history and import diagnostics |
+| Sonarr | Series and episode lookup, season monitoring, missing episodes, upcoming airings, searches and queue/history |
 | NZBGet / SABnzbd | Download status, queue/history, categories, pause/resume and targeted retries |
 | NZBHydra2 | Release searches and submission of a selected result to either downloader |
 
@@ -56,7 +56,6 @@ Environment variables override `.env` in the working directory. Restart after ch
 | --- | --- |
 | Seerr / Jellyseerr | `JELLYSEERR_URL`, `JELLYSEERR_API_KEY` |
 | Radarr | `RADARR_URL`, `RADARR_API_KEY` |
-| Sonarr | `SONARR_URL`, `SONARR_API_KEY` |
 | NZBGet | `NZBGET_URL`, `NZBGET_USERNAME`, `NZBGET_PASSWORD` |
 | SABnzbd | `SABNZBD_URL`, `SABNZBD_API_KEY` |
 | NZBHydra2 | `NZBHYDRA_URL`, `NZBHYDRA_API_KEY` |
@@ -147,6 +146,16 @@ These examples follow the hosts' documented configuration. Automated tests exerc
 
 Most lists default to 25 results, with a maximum requested page size of 100. Queue/history in Sonarr/Radarr use `page_number`; local lists, downloaders and Hydra use `offset`. Whole-list APIs report local paging rather than pretending the backend paginated.
 
+### Upcoming airings and releases
+
+Ask what is coming up and the answer should not require guessing at titles first:
+
+- `sonarr_get_calendar` lists scheduled episodes between two dates, soonest first, with the series title on each entry. That is the right tool for "when is the next episode of X" and for a whole-library view.
+- `sonarr_get_next_up` lists one series' monitored episodes airing on or after `since` (default: now), soonest first. Sonarr requires a `seriesId` there, so an unscoped call is refused rather than guessed at.
+- `radarr_get_calendar` lists movie releases in a window.
+
+All three take an explicit window (`start`, `end` as ISO dates or timestamps) that is validated before any request. The calendar endpoints ignore a `movieId`/`seriesId` filter, so per-title narrowing happens on the response, not the request. Entries carry `hasFile`, so a scheduled airing and an already-imported one stay distinguishable.
+
 ### NZBHydra downloads
 
 Fetch capabilities before using ID, category, age, size or indexer filters. To download a result, supply its Hydra ID, a configured category and `backend="nzbget"` or `backend="sabnzbd"`. ArrChestra retrieves the NZB and uploads its bytes without returning authenticated links.
@@ -162,8 +171,8 @@ If Hydra redirects to an indexer, allow only that trusted origin through `NZBHYD
 | --- | --- |
 | Common | `ping`, `get_services` |
 | Seerr | `search_media`, `request_media`, `get_request` |
-| Radarr | `radarr_find_movies`, `radarr_get_movie`, `radarr_get_options`, `radarr_get_queue`, `radarr_get_history`, `radarr_get_health`, `radarr_get_releases`, `radarr_get_command`, `radarr_add_movie`, `radarr_set_monitored`, `radarr_search_movie`, `radarr_grab_release` |
-| Sonarr | `sonarr_find_series`, `sonarr_get_series`, `sonarr_get_episodes`, `sonarr_get_missing`, `sonarr_get_options`, `sonarr_get_queue`, `sonarr_get_history`, `sonarr_get_health`, `sonarr_get_releases`, `sonarr_get_command`, `sonarr_add_series`, `sonarr_set_monitoring`, `sonarr_search_episodes`, `sonarr_grab_release` |
+| Radarr | `radarr_find_movies`, `radarr_get_movie`, `radarr_get_options`, `radarr_get_queue`, `radarr_get_history`, `radarr_get_health`, `radarr_get_calendar`, `radarr_get_releases`, `radarr_get_command`, `radarr_add_movie`, `radarr_set_monitored`, `radarr_search_movie`, `radarr_grab_release` |
+| Sonarr | `sonarr_find_series`, `sonarr_get_series`, `sonarr_get_episodes`, `sonarr_get_next_up`, `sonarr_get_missing`, `sonarr_get_calendar`, `sonarr_get_options`, `sonarr_get_queue`, `sonarr_get_history`, `sonarr_get_health`, `sonarr_get_releases`, `sonarr_get_command`, `sonarr_add_series`, `sonarr_set_monitoring`, `sonarr_search_episodes`, `sonarr_grab_release` |
 | Downloaders | `downloads_get_status`, `downloads_get_queue`, `downloads_get_history`, `downloads_get_categories`, `downloads_pause`, `downloads_resume`, `downloads_retry` |
 | NZBHydra | `nzbhydra_get_capabilities`, `nzbhydra_search`, `nzbhydra_download_result` |
 

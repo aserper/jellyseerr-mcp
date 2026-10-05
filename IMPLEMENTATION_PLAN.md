@@ -84,8 +84,8 @@ Per-service locks prevent races within one process. They don't provide exactly-o
 ## Implementation checklist
 
 - [x] Optional configuration, safe transport, permissions and consistent entrypoints.
-- [x] Radarr inspection, additions, monitoring, searches and accepted-release grabs.
-- [x] Sonarr seasons, episodes, missing content and ownership checks.
+- [x] Radarr inspection, additions, monitoring, calendar reads, searches and accepted-release grabs.
+- [x] Sonarr seasons, episodes, missing content, calendar/next-up reads and ownership checks.
 - [x] NZBGet queue/history, submission, pause/resume and targeted retry.
 - [x] SABnzbd equivalents with its native API contracts.
 - [x] NZBHydra search and both downloader handoffs.
