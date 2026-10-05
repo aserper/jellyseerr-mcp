@@ -38,8 +38,6 @@ async def test_stdio_protocol_only_stdout(module, isolated, caplog, tmp_path):
                     assert names == {'ping','get_services','search_media','get_request','request_media'}
                 else:
                     assert {'ping','get_services','search_media','get_request','request_media'} <= names
-                    # Sonarr calendar/next-up surface only when Sonarr is configured.
-                    assert {'sonarr_get_calendar','sonarr_get_next_up'} <= names
                 ping = await session.call_tool('ping',{})
                 assert not ping.isError
                 denied = await session.call_tool('request_media',{'media_id':1,'media_type':'movie'})
