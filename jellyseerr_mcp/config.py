@@ -11,6 +11,10 @@ from dotenv import load_dotenv
 
 SERVICES = ("jellyseerr", "radarr", "sonarr", "nzbget", "sabnzbd", "nzbhydra")
 
+# Services whose target/release search fans out over every configured indexer and
+# therefore needs its own, longer deadline than ordinary metadata reads.
+SEARCH_TIMEOUT_SERVICES = ("radarr", "sonarr")
+
 
 def validate_url(value: str, label: str = "URL") -> str:
     try:
@@ -45,13 +49,13 @@ def boolean(name: str, default: bool = False) -> bool:
     return value.lower() == "true"
 
 
-def timeout(name: str, default: float) -> float:
+def timeout(name: str, default: float, maximum: float = 300.0, allow_zero: bool = False) -> float:
     try:
         value = float(os.getenv(name, str(default)))
     except ValueError:
         raise ValueError(f"{name} must be a positive finite number") from None
-    if not math.isfinite(value) or not 0 < value <= 300:
-        raise ValueError(f"{name} must be between 0 and 300 seconds")
+    if not math.isfinite(value) or value > maximum or (value <= 0 and not (allow_zero and value == 0)):
+        raise ValueError(f"{name} must be between 0 and {maximum:g} seconds")
     return value
 
 
@@ -65,6 +69,9 @@ class ServiceConfig:
     timeout: float = 15.0
     allow_writes: bool = False
     allowed_redirect_origins: tuple[str, ...] = ()
+    # Target/release search fans out over every indexer and is routinely slower than
+    # metadata reads, so it carries its own deadline.
+    search_timeout: float = 120.0
 
     def __post_init__(self) -> None:
         if self.name not in SERVICES:
@@ -72,6 +79,9 @@ class ServiceConfig:
         object.__setattr__(self, "url", validate_url(self.url, f"{self.name} URL"))
         if not math.isfinite(self.timeout) or not 0 < self.timeout <= 300:
             raise ValueError("Service timeout must be positive and finite, at most 300 seconds")
+        # 0 disables the bound and leaves the transport default in place.
+        if not math.isfinite(self.search_timeout) or not 0 <= self.search_timeout <= 300:
+            raise ValueError("Service search timeout must be finite and at most 300 seconds")
         for credential in (self.api_key, self.username, self.password):
             if any(ord(c) < 32 or ord(c) == 127 for c in credential):
                 raise ValueError("Credentials must not contain control characters")
@@ -111,6 +121,9 @@ def load_config() -> AppConfig:
     load_dotenv(dotenv_path=Path.cwd() / ".env", override=False)
     common_timeout = timeout("MCP_REQUEST_TIMEOUT", 15.0)
     read_only = boolean("MCP_READ_ONLY", True)
+    # One default for every service, validated once even for services that are not
+    # configured, so a typo surfaces instead of silently doing nothing.
+    search_default = timeout("MCP_SEARCH_TIMEOUT", 120.0, allow_zero=True)
     configs: dict[str, ServiceConfig] = {}
     for name in SERVICES:
         prefix = name.upper()
@@ -122,11 +135,16 @@ def load_config() -> AppConfig:
         if missing:
             raise ValueError("Incomplete service configuration: " + ", ".join(missing))
         redirects = tuple(u.strip() for u in os.getenv("NZBHYDRA_ALLOWED_REDIRECT_ORIGINS", "").split(",") if u.strip()) if name == "nzbhydra" else ()
+        # Only indexer-backed search services take an override; any other prefix is ignored.
+        # 0 disables the bound, so the search deadline may be zero here even though the
+        # shared default must be positive.
+        search_timeout = (timeout(f"{prefix}_SEARCH_TIMEOUT", search_default, allow_zero=True)
+                          if name in SEARCH_TIMEOUT_SERVICES else search_default)
         configs[name] = ServiceConfig(name, values["URL"],
             api_key=values.get("API_KEY", ""), username=values.get("USERNAME", ""),
             password=values.get("PASSWORD", ""), timeout=timeout(f"{prefix}_TIMEOUT", common_timeout),
             allow_writes=boolean(f"{prefix}_ALLOW_WRITES") and not read_only,
-            allowed_redirect_origins=redirects)
+            allowed_redirect_origins=redirects, search_timeout=search_timeout)
     if not configs:
         raise ValueError("Configure at least one service URL and its credentials (see .env.example)")
     return AppConfig(services=configs, timeout=common_timeout, read_only=read_only,

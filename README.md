@@ -69,6 +69,8 @@ Supply base URLs without API suffixes, credentials or query strings. Reverse-pro
 | --- | --- | --- |
 | `MCP_REQUEST_TIMEOUT` | `15` | Per-request timeout in seconds, positive and at most 300 |
 | `<SERVICE>_TIMEOUT` | Shared timeout | Override for one service, including `JELLYSEERR_TIMEOUT` |
+| `MCP_SEARCH_TIMEOUT` | `120` | Timeout for release/target search, which waits on every enabled indexer |
+| `<SERVICE>_SEARCH_TIMEOUT` | Search timeout | Override for Radarr or Sonarr; `0` uses the ordinary request timeout |
 | `LOG_LEVEL` | `INFO` | Diagnostic log level |
 | `MCP_READ_ONLY` | `true` | Block mutations |
 | `<SERVICE>_ALLOW_WRITES` | `false` | Permit that service's operations when read-only mode is off |

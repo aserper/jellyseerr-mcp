@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json as json_module
 import logging
+import math
 import re
 import time
 import xml.etree.ElementTree as ET
@@ -130,7 +131,8 @@ class ServiceClient:
 
     def request_bytes(self, method: str, path: str, *, params: dict | None = None,
                       json: Any = None, data: dict | None = None, files: Any = None,
-                      mutation: bool = False, follow_allowed_redirects: bool = False) -> tuple[bytes, dict]:
+                      mutation: bool = False, follow_allowed_redirects: bool = False,
+                      timeout: float | None = None) -> tuple[bytes, dict]:
         if mutation:
             self.require_write()
         parsed = urlsplit(path)
@@ -144,6 +146,13 @@ class ServiceClient:
         own_origin = origin(self.config.url)
         base_path = unquote(urlsplit(self.config.url).path).rstrip("/") + "/"
         allowed = {own_origin, *self.config.allowed_redirect_origins}
+        # None (or a disabled 0) keeps the client's configured deadline; a positive
+        # value widens this one request only (indexer fan-out), for both the socket
+        # and the wall clock.
+        widening = timeout is not None and timeout > 0
+        deadline: float = timeout if widening and timeout is not None else self.config.timeout
+        if not math.isfinite(deadline) or deadline <= 0:
+            raise ValueError("timeout must be a positive finite number")
         started = time.monotonic()
         try:
             for hop in range(4):
@@ -161,6 +170,10 @@ class ServiceClient:
                 # New Request avoids carrying cookies/auth to redirect destinations.
                 request = httpx.Request(method, url, headers=headers, params=params,
                                         json=json, data=data, files=files)
+                if widening:
+                    # httpx 0.28 has no timeout argument on send(); the per-request
+                    # deadline travels in the request extensions instead.
+                    request.extensions["timeout"] = httpx.Timeout(deadline).as_dict()
                 with closing(self._http.send(request, stream=True, auth=auth)) as response:
                     if response.is_redirect:
                         if not follow_allowed_redirects or mutation or method != "GET" or hop == 3:
@@ -185,7 +198,7 @@ class ServiceClient:
                     content = bytearray()
                     chunks = (response.content,) if response.is_stream_consumed else response.iter_raw()
                     for chunk in chunks:
-                        if time.monotonic() - started > self.config.timeout:
+                        if time.monotonic() - started > deadline:
                             raise httpx.ReadTimeout("bounded deadline")
                         if len(content) + len(chunk) > MAX_RESPONSE_BYTES:
                             raise ServiceError(f"{self.config.name}: response exceeds 8 MiB limit")
@@ -203,9 +216,10 @@ class ServiceClient:
 
     def request_json(self, method: str, path: str, *, params: dict | None = None,
                      json: Any = None, data: dict | None = None, files: Any = None,
-                     mutation: bool = False) -> Any:
+                     mutation: bool = False, timeout: float | None = None) -> Any:
         content, _ = self.request_bytes(method, path, params=params, json=json,
-                                        data=data, files=files, mutation=mutation)
+                                        data=data, files=files, mutation=mutation,
+                                        timeout=timeout)
         if not content:
             return None
         try:

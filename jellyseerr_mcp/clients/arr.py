@@ -87,6 +87,15 @@ class ArrClientBase(ServiceClient):
             return []
         return result if isinstance(result, list) else [result]
 
+    def _release_search(self, params: dict) -> list:
+        """Fresh target search; uses the longer per-service search deadline.
+
+        Indexer fan-out is routinely slower than metadata reads and waits on
+        unresponsive indexers, so it must not share the short request timeout.
+        """
+        return self._list('GET', 'api/v3/release', params=params,
+                          timeout=self.config.search_timeout)
+
     def _options(self) -> dict:
         return {
             'root_folders': [select(r, ('id', 'path', 'freeSpace', 'accessible'))
@@ -210,7 +219,7 @@ class RadarrClient(ArrClientBase):
         """Fresh interactive release search for one movie (quota-consuming upstream)."""
         movie_id = positive_id(movie_id, 'movie_id')
         pagination(offset, limit)
-        releases = self._list('GET', 'api/v3/release', params={'movieId': movie_id})
+        releases = self._release_search({'movieId': movie_id})
         return page([self._project_release(r) for r in releases], offset, limit)
 
     def command(self, command_id: int | str) -> dict:
@@ -268,7 +277,7 @@ class RadarrClient(ArrClientBase):
             raise ValueError('guid must be a non-empty string')
         if len(guid) > 2048:
             raise ValueError('guid must be at most 2048 characters')
-        releases = self._list('GET', 'api/v3/release', params={'movieId': movie_id})
+        releases = self._release_search({'movieId': movie_id})
         match = self._release_matches(releases, guid, indexer_id)
         if match is None:
             raise ValueError('release is stale: not in current results for this movie; '
@@ -387,7 +396,7 @@ class SonarrClient(ArrClientBase):
         else:
             raise ValueError('episode_id or season_number is required; '
                              'the Sonarr API does not search releases for a series alone')
-        releases = self._list('GET', 'api/v3/release', params=params)
+        releases = self._release_search(params)
         return page([self._project_release(r) for r in releases], offset, limit)
 
     def command(self, command_id: int | str) -> dict:
@@ -542,7 +551,7 @@ class SonarrClient(ArrClientBase):
                       'seasonNumber': _season_number(season_number)}
         else:
             raise ValueError('episode_id or season_number is required to requery releases')
-        releases = self._list('GET', 'api/v3/release', params=params)
+        releases = self._release_search(params)
         match = self._release_matches(releases, guid, indexer_id)
         if match is None:
             raise ValueError('release is stale: not in current results; '
