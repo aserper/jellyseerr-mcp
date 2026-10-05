@@ -219,30 +219,32 @@ def test_radarr_health_command_and_release_projection():
             'id': 77, 'name': 'MoviesSearch', 'commandName': 'MoviesSearch', 'status': 'completed',
             'queued': 'x', 'started': 'x', 'ended': 'x', 'duration': '00:00:02',
             'body': {'movieIds': [1]}})),
-        (r'/api/v3/release', 'GET', lambda req: (200, [release()]))])
+        (r'/api/v3/release', 'GET', lambda req: (200, [release()])),
+        (r'/api/v3/movie/1', 'GET', lambda req: (200, movie(1)))])
     health = client.health()
     assert set(health[0]) == {'id', 'source', 'type', 'message'}
     assert len(health[0]['message']) == 512  # upstream dumps stay bounded
     command = client.command(77)
     assert command['id'] == 77 and command['name'] == 'MoviesSearch' and command['status'] == 'completed'
     result = client.releases(1, offset=0, limit=1)
-    assert api.params(2) == {'movieId': '1'}
+    assert api.params(3) == {'movieId': '1'}
     assert result['pagination'] == 'local' and result['total'] == 1 and result['limit'] == 1
     item = result['items'][0]
     assert item['guid'] == 'guid-1' and item['approved'] is True and item['rejections'] == []
     assert 'downloadUrl' not in item and 'infoUrl' not in item  # authenticated links never leave
     with pytest.raises(ValueError, match='limit'):
         client.releases(1, limit=101)
-    assert len(api.calls) == 3  # invalid paging never reaches the network
+    assert len(api.calls) == 4  # invalid paging never reaches the network
     client.close()
 
 
 def test_empty_success_bodies_become_empty_results():
     client, api = make_client(RadarrClient, RADARR, [
+        (r'/api/v3/movie/1', 'GET', lambda req: (200, movie(1))),
         (r'/api/v3/release', 'GET', lambda req: (204, None)),
         (r'/api/v3/health', 'GET', lambda req: (204, None))])
     assert client.releases(1)['items'] == [] and client.health() == []
-    assert api.calls[0].method == 'GET' and len(api.calls) == 2
+    assert api.calls[0].method == 'GET' and len(api.calls) == 3
     client.close()
 
 
@@ -355,18 +357,20 @@ def test_radarr_search_missing_movie_fails_before_command():
 
 def test_radarr_grab_requeries_then_posts_verified_release():
     client, api = make_client(RadarrClient, RADARR, [
+        (r'/api/v3/movie/1', 'GET', lambda req: (200, movie(1))),
         (r'/api/v3/release', 'GET', lambda req: (200, [release(guid='other'),
                                                        release(guid='guid-1')])),
         (r'/api/v3/release', 'POST', lambda req: (200, release()))])
     result = client.grab(1, 'guid-1', '3')
-    assert api.calls[0].method == 'GET' and api.params(0) == {'movieId': '1'}
-    assert api.bodies()[1] == {'guid': 'guid-1', 'indexerId': 3, 'movieId': 1}
+    assert api.calls[1].method == 'GET' and api.params(1) == {'movieId': '1'}
+    assert api.bodies()[2] == {'guid': 'guid-1', 'indexerId': 3, 'movieId': 1}
     assert result == {'grabbed': True, 'guid': 'guid-1', 'indexerId': 3}
     client.close()
 
 
 def test_radarr_grab_refuses_stale_or_wrong_indexer_release():
     client, api = make_client(RadarrClient, RADARR, [
+        (r'/api/v3/movie/1', 'GET', lambda req: (200, movie(1))),
         (r'/api/v3/release', 'GET', lambda req: (200, [release(guid='guid-1')])),
         (r'/api/v3/release', 'POST', lambda req: (200, release()))])
     with pytest.raises(ValueError, match='stale'):
@@ -375,7 +379,7 @@ def test_radarr_grab_refuses_stale_or_wrong_indexer_release():
         client.grab(1, 'guid-1', 9)
     with pytest.raises(ValueError, match='guid'):
         client.grab(1, 'g' * 2049, 3)  # native guid kept intact when valid; oversized refused
-    assert len(api.calls) == 2 and not any(c.method == 'POST' for c in api.calls)
+    assert len(api.calls) == 4 and not any(c.method == 'POST' for c in api.calls)
     client.close()
 
 
@@ -383,6 +387,7 @@ def test_radarr_grab_refuses_rejected_release_without_forcing():
     rejected = release(approved=False, rejected=True, temporarilyRejected=False,
                        rejections=['Quality not wanted', 'Indexer blocked'])
     client, api = make_client(RadarrClient, RADARR, [
+        (r'/api/v3/movie/1', 'GET', lambda req: (200, movie(1))),
         (r'/api/v3/release', 'GET', lambda req: (200, [rejected])),
         (r'/api/v3/release', 'POST', lambda req: (200, rejected))])
     with pytest.raises(ValueError) as excinfo:
@@ -650,12 +655,13 @@ def test_sonarr_releases_validate_episode_ownership_and_scope():
 def test_sonarr_grab_season_scope_and_rejection_gate():
     def grab_routes(releases):
         return [
+            (r'/api/v3/series/5', 'GET', lambda req: (200, series(5))),
             (r'/api/v3/release', 'GET', lambda req: (200, releases)),
             (r'/api/v3/release', 'POST', lambda req: (200, releases))]
     client, api = make_client(SonarrClient, SONARR, grab_routes([release(guid='s2')]))
     client.grab(5, 's2', 3, season_number=0)
-    assert api.params(0) == {'seriesId': '5', 'seasonNumber': '0'}
-    assert 'episodeId' not in api.bodies()[1]
+    assert api.params(1) == {'seriesId': '5', 'seasonNumber': '0'}
+    assert 'episodeId' not in api.bodies()[2]
     rejected = release(guid='bad', approved=False, temporarilyRejected=True,
                        rejections=['Season pack not wanted'])
     client2, api2 = make_client(SonarrClient, SONARR, grab_routes([rejected]))
@@ -670,6 +676,7 @@ def test_sonarr_grab_season_scope_and_rejection_gate():
 
 def test_sonarr_grab_rejects_negative_season_and_stale_guid():
     client, api = make_client(SonarrClient, SONARR, [
+        (r'/api/v3/series/5', 'GET', lambda req: (200, series(5))),
         (r'/api/v3/release', 'GET', lambda req: (200, [release()])),
         (r'/api/v3/release', 'POST', lambda req: (200, release()))])
     with pytest.raises(ValueError, match='season_number'):
@@ -678,7 +685,34 @@ def test_sonarr_grab_rejects_negative_season_and_stale_guid():
         client.grab(5, 'g' * 2049, 3, season_number=1)
     with pytest.raises(ValueError, match='stale'):
         client.grab(5, 'missing', 3, season_number=1)
-    assert len(api.calls) == 1 and not any(c.method == 'POST' for c in api.calls)
+    # invalid season and guid never reach the network; only the stale requery does
+    assert [c.method for c in api.calls] == ['GET', 'GET']
+    assert api.path(0) == '/api/v3/series/5' and api.path(1) == '/api/v3/release'
+    assert not any(c.method == 'POST' for c in api.calls)
+    client.close()
+
+
+def test_sonarr_rejects_unknown_series_before_indexer_search():
+    """Sonarr 500s on an unknown seriesId; the client must preflight it to a clear error."""
+    client, api = make_client(SonarrClient, SONARR, [
+        (r'/api/v3/series/999', 'GET', lambda req: (404, {'message': 'Not Found'})),
+        (r'/api/v3/release', 'GET', lambda req: (200, [release()]))])
+    with pytest.raises(ServiceError, match='HTTP 404'):
+        client.releases(999, season_number=1)
+    with pytest.raises(ServiceError, match='HTTP 404'):
+        client.grab(999, 'guid-1', 3, season_number=1)
+    assert api.calls == [] or not any(c.url.path == '/api/v3/release' for c in api.calls)
+    client.close()
+
+
+def test_radarr_rejects_unknown_movie_before_indexer_search():
+    """Radarr 500s on an unknown movieId; the client must preflight it to a clean error."""
+    client, api = make_client(RadarrClient, RADARR, [
+        (r'/api/v3/movie/999', 'GET', lambda req: (404, {'message': 'Movie with ID 999 does not exist'})),
+        (r'/api/v3/release', 'GET', lambda req: (200, [release()]))])
+    with pytest.raises(ServiceError, match='HTTP 404'):
+        client.releases(999)
+    assert not any(c.url.path == '/api/v3/release' for c in api.calls)  # no indexer fan-out
     client.close()
 
 
@@ -717,23 +751,24 @@ def test_target_search_uses_search_deadline_and_metadata_uses_request_deadline()
     handed to the transport, because MockTransport cannot model socket timeouts.
     """
     client, api = make_client(RadarrClient, RADARR, [
-        (r'/api/v3/release', 'GET', lambda req: (200, [release()])),
-        (r'/api/v3/movie/1', 'GET', lambda req: (200, movie(1)))])
+        (r'/api/v3/movie/1', 'GET', lambda req: (200, movie(1))),
+        (r'/api/v3/release', 'GET', lambda req: (200, [release()]))])
     config = ServiceConfig('radarr', RADARR, api_key='secret-key-1', timeout=15.0,
                            allow_writes=True, search_timeout=120.0)
     client.close()
     client = RadarrClient(config, transport=api.transport())
     client.releases(1, limit=1)
-    assert api.calls[0].extensions['timeout'] == {'connect': 120.0, 'read': 120.0,
+    assert api.calls[1].extensions['timeout'] == {'connect': 120.0, 'read': 120.0,
                                                   'write': 120.0, 'pool': 120.0}
     client.get(1)
-    assert api.calls[1].extensions['timeout']['read'] == 15.0  # client default, not the search budget
+    assert api.calls[2].extensions['timeout']['read'] == 15.0  # client default, not the search budget
     client.close()
 
 
 def test_grab_requery_uses_the_search_deadline():
     """grab() requeries releases first, so it must not inherit the short deadline."""
     client, api = make_client(RadarrClient, RADARR, [
+        (r'/api/v3/movie/1', 'GET', lambda req: (200, movie(1))),
         (r'/api/v3/release', 'GET', lambda req: (200, [release()])),
         (r'/api/v3/release', 'POST', lambda req: (200, release()))])
     config = ServiceConfig('radarr', RADARR, api_key='secret-key-1', timeout=15.0,
@@ -741,7 +776,7 @@ def test_grab_requery_uses_the_search_deadline():
     client.close()
     client = RadarrClient(config, transport=api.transport())
     assert client.grab(1, 'guid-1', 3)['grabbed'] is True
-    assert api.calls[0].method == 'GET'
-    assert api.calls[0].extensions['timeout']['read'] == 120.0
-    assert api.calls[1].extensions['timeout']['read'] == 15.0  # mutation keeps the default
+    assert api.calls[1].method == 'GET'
+    assert api.calls[1].extensions['timeout']['read'] == 120.0
+    assert api.calls[2].extensions['timeout']['read'] == 15.0  # mutation keeps the default
     client.close()
