@@ -6,6 +6,7 @@ import logging
 import math
 import re
 import time
+from datetime import date
 import xml.etree.ElementTree as ET
 from contextlib import closing
 from typing import Any, Iterable, cast
@@ -40,6 +41,34 @@ def pagination(offset: int, limit: int) -> None:
         raise ValueError("offset must be between 0 and 1000000")
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
         raise ValueError("limit must be between 1 and 100")
+
+
+def window(start: str, end: str, days_max: int = 90) -> tuple[str, str]:
+    """Validate a calendar window and return the two native date strings.
+
+    ``start`` and ``end`` are ISO dates. Both calendar APIs reject malformed
+    dates with 400, so the shape is checked here as well; the order and span are
+    rejected locally because the window is the one input that can force an
+    unbounded upstream read. The values are passed through unchanged, so a date
+    stays a date and an ISO timestamp stays a timestamp.
+    """
+    values = []
+    for value, name in ((start, "start"), (end, "end")):
+        if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}([T ].*)?", value.strip()):
+            raise ValueError(f"{name} must be an ISO date")
+        text = value.strip()
+        if len(text) > 30:
+            raise ValueError(f"{name} must be an ISO date")
+        values.append(text)
+    try:
+        first, last = (date.fromisoformat(item[:10]) for item in values)
+    except ValueError:
+        raise ValueError("start and end must be valid ISO dates") from None
+    if first > last:
+        raise ValueError("start must not be after end")
+    if (last - first).days > days_max:
+        raise ValueError(f"window must not exceed {days_max} days")
+    return values[0], values[1]
 
 
 def page(items: list, offset: int = 0, limit: int = 25) -> dict:

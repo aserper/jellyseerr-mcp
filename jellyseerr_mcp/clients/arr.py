@@ -8,6 +8,13 @@ updates; ``POST release`` resolves the release from a server-side cache keyed
 ``{indexerId}_{guid}`` and does NOT re-check rejections, so clients must
 requery results and refuse non-approved releases before grabbing.
 
+Live probes (2026-10-05) show ``/api/v3/calendar`` accepts only ``start``/``end``
+as bare dates or ISO timestamps and ignores a ``movieId``/``seriesId`` filter, so
+per-title scoping is done by the caller; Sonarr's calendar returns the owning
+``series`` sub-object only when ``includeSeries=true`` is sent. Sonarr's
+``/api/v3/episode`` requires a ``seriesId`` (or episodeIds) and answers 400
+without one, so whole-library next-up is only possible through the calendar.
+
 Rules enforced here: every mutation calls require_write() before ANY outbound
 request (including preflight reads); additions never auto-search; grabs
 revalidate the inspected release (guid + indexerId) and never force rejected
@@ -15,7 +22,9 @@ ones; episode selections are owned by the stated series and bounded to 100.
 """
 from __future__ import annotations
 
-from ..http import ServiceClient, page, pagination, positive_id, select
+from datetime import datetime, timezone
+
+from ..http import ServiceClient, page, pagination, positive_id, select, window
 
 MOVIE_FIELDS = ('id', 'title', 'tmdbId', 'year', 'monitored', 'status', 'path',
                 'qualityProfileId', 'hasFile', 'sizeOnDisk')
@@ -34,6 +43,12 @@ QUEUE_FIELDS = ('id', 'title', 'status', 'trackedDownloadStatus',
                 'protocol', 'outputPath', 'downloadId')
 HISTORY_DATA_FIELDS = ('indexer', 'releaseGroup', 'downloadClient', 'reason')
 PROFILE_FIELDS = ('id', 'name', 'upgradeAllowed')
+CALENDAR_WINDOW_DAYS = 90
+MOVIE_CALENDAR_FIELDS = ('id', 'title', 'tmdbId', 'year', 'monitored', 'hasFile',
+                         'status', 'inCinemas', 'digitalRelease', 'physicalRelease',
+                         'releaseDate')
+SERIES_CALENDAR_FIELDS = ('id', 'seriesId', 'seasonNumber', 'episodeNumber', 'title',
+                          'airDate', 'airDateUtc', 'hasFile', 'monitored', 'tvdbId')
 MAX_SELECTIONS = 100
 
 
@@ -52,6 +67,19 @@ def _season_number(value: object, name: str = 'season_number') -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ValueError(f'{name} must be a non-negative integer (0 = specials)')
     return value
+
+
+def _instant(value: object) -> datetime | None:
+    """Parse a Sonarr/Radarr air or release timestamp, or None when unusable."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 def _bounded_text(value: object, limit: int = 512) -> str:
@@ -215,6 +243,19 @@ class RadarrClient(ArrClientBase):
     def health(self) -> list[dict]:
         return self._health()
 
+    def calendar(self, start: str, end: str, offset: int = 0, limit: int = 25) -> dict:
+        """Scheduled releases in a window, soonest first; locally paged.
+
+        Radarr's calendar ignores a movieId filter, so per-movie filtering stays
+        with the caller; the endpoint already accepts a yyyy-mm-dd window. Only
+        future-dated or recently dated entries appear, so a window that excludes
+        "today" can legitimately return nothing.
+        """
+        first, last = window(start, end, CALENDAR_WINDOW_DAYS)
+        pagination(offset, limit)
+        movies = self._list('GET', 'api/v3/calendar', params={'start': first, 'end': last})
+        return page([select(m, MOVIE_CALENDAR_FIELDS) for m in movies], offset, limit)
+
     def releases(self, movie_id: int | str, offset: int = 0, limit: int = 25) -> dict:
         """Fresh interactive release search for one movie (quota-consuming upstream)."""
         movie_id = positive_id(movie_id, 'movie_id')
@@ -339,6 +380,63 @@ class SonarrClient(ArrClientBase):
         series_id = positive_id(series_id, 'series_id')
         episodes = self._list('GET', 'api/v3/episode', params={'seriesId': series_id})
         return page([self._episode(e) for e in episodes], offset, limit)
+
+    def _sonarr_episode(self, record: dict) -> dict:
+        """A calendar entry: episode fields plus the owning series' title."""
+        projected = select(record, SERIES_CALENDAR_FIELDS)
+        series = record.get('series')
+        if isinstance(series, dict):
+            projected['seriesTitle'] = series.get('title')
+            projected['seriesStatus'] = series.get('status')
+        return projected
+
+    def calendar(self, start: str, end: str, offset: int = 0, limit: int = 25) -> dict:
+        """Scheduled episodes in a window, soonest first; locally paged.
+
+        The endpoint ignores a seriesId filter, so filtering by series stays with
+        the caller; it may return unmonitored entries, which pass through as
+        monitored=false instead of being hidden.
+        """
+        first, last = window(start, end, CALENDAR_WINDOW_DAYS)
+        pagination(offset, limit)
+        episodes = self._list('GET', 'api/v3/calendar', params={
+            'start': first, 'end': last, 'includeSeries': 'true'})
+        return page([self._sonarr_episode(e) for e in episodes], offset, limit)
+
+    def next_up(self, series_id: int | str, since: str | None = None, offset: int = 0,
+                limit: int = 25, include_unmonitored: bool = False) -> dict:
+        """Episodes of one series airing on or after `since`, soonest first; local paging.
+
+        Sonarr requires a seriesId on `/api/v3/episode`, so this is inherently
+        per-series; use the calendar for a whole-library view. `since` is an ISO
+        date or timestamp and defaults to the current UTC time at call time. The
+        stored episode list reaches well past any calendar window, so this keeps
+        its lookahead. Episodes with no parseable air date cannot be proven
+        upcoming and are dropped.
+        """
+        series_id = positive_id(series_id, 'series_id')
+        if since is None:
+            cutoff = datetime.now(timezone.utc)
+        else:
+            try:
+                cutoff = _instant(window(since, since)[0])
+            except ValueError:
+                raise ValueError('since must be an ISO date or timestamp') from None
+            if cutoff is None:
+                raise ValueError('since must be an ISO date or timestamp')
+        pagination(offset, limit)
+        # includeSeries would inflate the payload many times over; next_up never
+        # projects a series title, so the plain episode read stays lean.
+        upcoming = []
+        for episode in self._list('GET', 'api/v3/episode',
+                                  params={'seriesId': series_id}):
+            if not include_unmonitored and not episode.get('monitored'):
+                continue
+            airs = _instant(episode.get('airDateUtc'))
+            if airs is not None and airs >= cutoff:
+                upcoming.append((airs, episode))
+        upcoming.sort(key=lambda pair: pair[0])
+        return page([self._episode(e) for _, e in upcoming], offset, limit)
 
     def missing(self, page_number: int = 1, limit: int = 25) -> dict:
         """Monitored episodes without files, newest-airing first (native paging)."""
