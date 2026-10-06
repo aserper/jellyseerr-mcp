@@ -2,23 +2,21 @@
 
 ![ArrChestra retro-CRT banner](header.png)
 
-An MCP server for **Seerr/Jellyseerr, Sonarr, Radarr, NZBGet, SABnzbd and NZBHydra2**. Connect it to an MCP client to request media, manage monitoring, inspect failed acquisitions and control downloads.
+ArrChestra connects your MCP client to **Seerr/Jellyseerr, Sonarr, Radarr, NZBGet, SABnzbd and NZBHydra2**. You can request movies and shows, check upcoming episodes, change monitoring, and pause or retry downloads.
 
-Configure only the services you use. ArrChestra starts read-only, checks permissions before making changes, and leaves scheduling to your existing tools.
+Each service is optional. Configure the ones you use; ArrChestra starts in read-only mode.
 
 ## What you can do
 
-| Service | Tools cover |
+| Service | Supported operations |
 | --- | --- |
 | Seerr / Jellyseerr | Media search, requests and request status |
 | Radarr | Movie lookup and additions, monitoring, release calendars, release searches, queue/history and import diagnostics |
-| Sonarr | Series and episode lookup, season monitoring, missing episodes, upcoming airings, searches and queue/history |
+| Sonarr | Series and episode lookup, season monitoring, missing episodes, upcoming airings, searches, queue/history and individual queue removal |
 | NZBGet / SABnzbd | Download status, queue/history, categories, pause/resume and targeted retries |
 | NZBHydra2 | Release searches and submission of a selected result to either downloader |
 
-For example: "Monitor seasons 1 and 2 of this show", "Why hasn't this movie imported?", or "Pause this download, not the whole queue."
-
-There are no delete, purge, restart, configuration-write or script-control tools.
+There are no tools for deleting library titles, purging whole queues, restarting services, changing service configuration or running scripts.
 
 ## Quick start
 
@@ -61,9 +59,9 @@ Environment variables override `.env` in the working directory. Restart after ch
 | SABnzbd | `SABNZBD_URL`, `SABNZBD_API_KEY` |
 | NZBHydra2 | `NZBHYDRA_URL`, `NZBHYDRA_API_KEY` |
 
-Unset services have no tools. Partial configuration produces a startup error listing the missing settings. At least one service must be configured; Seerr is optional. One instance of each service is supported, and both downloaders can coexist.
+Only configured services appear in your client's tool list. Configure at least one service. If a service is missing required settings, startup fails and lists what's missing. You can connect one instance of each service, including both NZBGet and SABnzbd.
 
-Supply base URLs without API suffixes, credentials or query strings. Reverse-proxy prefixes work, for example `https://media.example.com/sonarr`. TLS verification stays on. Prefer HTTPS, especially for NZBGet's Basic authentication. SABnzbd needs its full API key, not its add-only NZB key.
+Use each service's base URL, without an API suffix, credentials or query string. Paths such as `https://media.example.com/sonarr` are supported. Use HTTPS where possible; certificate verification is always enabled. SABnzbd requires its full API key, not the add-only NZB key.
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
@@ -77,11 +75,11 @@ Supply base URLs without API suffixes, credentials or query strings. Reverse-pro
 | `MCP_ALLOW_RAW_READ` | `false` | Optional legacy `GET status` tool only |
 | `NZBHYDRA_ALLOWED_REDIRECT_ORIGINS` | Empty | Trusted indexer origins for NZB retrieval redirects |
 
-Keep credentials in the process environment or a protected `.env` file, never in prompts or Git. The example file contains placeholders; environment files and local agent state are ignored by Git and excluded from the Docker context.
+Store API keys and passwords in environment variables or a protected `.env` file. Don't put them in prompts or commit them. `.env` files are ignored by Git and excluded from Docker builds.
 
 ### Allowing changes
 
-The global switch alone grants no writes. Opt into each service separately:
+To allow changes, turn off read-only mode and enable writes for each service you want to control:
 
 ```dotenv
 MCP_READ_ONLY=false
@@ -90,9 +88,9 @@ RADARR_ALLOW_WRITES=true
 NZBGET_ALLOW_WRITES=true
 ```
 
-Seerr and SABnzbd use `JELLYSEERR_ALLOW_WRITES` and `SABNZBD_ALLOW_WRITES`. Hydra submission checks the selected downloader's permission before fetching the NZB.
+For Seerr, use `JELLYSEERR_ALLOW_WRITES=true`; for SABnzbd, use `SABNZBD_ALLOW_WRITES=true`. Downloading a Hydra result requires write permission for the chosen downloader.
 
-A timeout doesn't prove a mutation failed. ArrChestra doesn't retry automatically; inspect queue, history or command status before trying again. Accepted submissions retain their job ID if a follow-up status check fails.
+If a write times out, it may still have succeeded. ArrChestra won't retry it automatically. Check the queue, history or command status before trying again. If a submission was accepted but its status check failed, the response still includes the job ID.
 
 ## Connecting an MCP client
 
@@ -132,38 +130,63 @@ Keep the service settings in ArrChestra's `.env`. Hermes also supports per-serve
 
 [OpenClaw's MCP registry](https://docs.openclaw.ai/cli/mcp/registry) uses `mcp.servers`. Set the same stdio command and arguments in that entry. `openclaw mcp probe` checks a saved server's connection and tool discovery. Consult the documentation for your installed version: runtime adapters differ, and this registry is separate from mcporter.
 
-These examples follow the hosts' documented configuration. Automated tests exercise MCP directly, not full Hermes or OpenClaw sessions.
+Hermes and OpenClaw configuration follows their documentation; end-to-end sessions with those clients aren't covered by this project's tests.
 
-## Using the tools
+## Using ArrChestra
 
-`get_services` reports configured services and effective write permissions. MCP `tools/list` supplies the argument schemas. Configuring all six services provides 41 tools, plus optional legacy status inspection.
+| Ask your client | What it uses |
+| --- | --- |
+| "Find Arrival in Seerr and request it." | Seerr search and request tools |
+| "Which episodes in my Sonarr library air this week?" | Sonarr calendar |
+| "When is the next monitored episode of Severance?" | Sonarr library lookup and next-up episodes |
+| "Stop monitoring season 1 of Severance. Leave the other seasons alone." | Sonarr season monitoring |
+| "Why hasn't Arrival imported? Check Radarr's queue and history." | Radarr queue, history and import diagnostics |
+| "Show the SABnzbd queue, then pause the download I choose." | Downloader queue and per-job pause |
 
-- **Use the right IDs.** Movie additions take TMDB IDs; series additions take TVDB IDs. Library operations use native Sonarr/Radarr IDs. Seerr request IDs, Hydra result IDs and downloader IDs are separate.
-- **Choose profiles and roots explicitly.** Discover them through `get_options`. Adding media never starts a search automatically. Direct Sonarr/Radarr additions bypass Seerr's approval workflow; use `request_media` when that workflow is intended.
-- **Keep monitoring scoped.** Sonarr changes only the selected seasons or episodes. Use separate calls for those scopes. Episode operations check series ownership; searches accept at most 100 episode IDs.
-- **Inspect before grabbing.** Release searches consume indexer quota. Grabs check the current GUID/indexer pair and refuse stale or rejected releases. Sonarr release searches need an episode or season scope. Search commands return a command ID, not a completed acquisition.
-- **Track by native download ID.** Sonarr/Radarr queue and history include `downloadId`. NZBGet uses positive integer strings; SABnzbd uses opaque strings. Don't match jobs by title alone.
-- **Make queue-wide actions explicit.** Pause/resume takes one `job_id` or `whole_queue=true`. Missing IDs never imply a global action. Retry targets one eligible failed history item; NZBGet redownloads it and may replace failed partial output.
+Calendars, lookups and status checks work in read-only mode. Requests, monitoring changes, searches that trigger downloads, and download controls need [write permission](#allowing-changes). `get_services` shows which services are connected and whether writes are enabled.
 
-Most lists default to 25 results, with a maximum requested page size of 100. Queue/history in Sonarr/Radarr use `page_number`; local lists, downloaders and Hydra use `offset`. Whole-list APIs report local paging rather than pretending the backend paginated.
+<details>
+<summary>Tool behavior and arguments</summary>
 
-### Upcoming airings and releases
+### Requesting and adding media
 
-Ask what is coming up and the answer should not require guessing at titles first:
+`request_media` creates a request in Seerr and uses its approval workflow. TV requests default to season 1; specify `seasons` to request others.
 
-- `sonarr_get_calendar` lists scheduled episodes between two dates, soonest first, with the series title on each entry. That is the right tool for "when is the next episode of X" and for a whole-library view.
-- `sonarr_get_next_up` lists one series' monitored episodes airing on or after `since` (default: now), soonest first. Sonarr requires a `seriesId` there, so an unscoped call is refused rather than guessed at.
-- `radarr_get_calendar` lists movie releases in a window.
+You can also add media directly with `radarr_add_movie` or `sonarr_add_series`. These bypass Seerr. They require a quality profile and root folder from `radarr_get_options` or `sonarr_get_options`, and don't start a search automatically.
 
-All three take an explicit window (`start`, `end` as ISO dates or timestamps) that is validated before any request. The calendar endpoints ignore a `movieId`/`seriesId` filter, so per-title narrowing happens on the response, not the request. Entries carry `hasFile`, so a scheduled airing and an already-imported one stay distinguishable.
+IDs depend on the operation: Seerr requests and Radarr additions use TMDB IDs; Sonarr additions use TVDB IDs. Once a title is in your library, monitoring and search tools use its Sonarr or Radarr ID. Episode tools use Sonarr episode IDs and check that they belong to the selected series.
 
-### NZBHydra downloads
+Sonarr monitoring changes only the selected seasons or episodes. Season and episode changes require separate calls.
 
-Fetch capabilities before using ID, category, age, size or indexer filters. To download a result, supply its Hydra ID, a configured category and `backend="nzbget"` or `backend="sabnzbd"`. ArrChestra retrieves the NZB and uploads its bytes without returning authenticated links.
+### Upcoming episodes and movie releases
 
-**This path bypasses Sonarr/Radarr release selection. It doesn't guarantee library import or fulfill a Seerr request.** Downloader categories keep their existing post-processing settings.
+`sonarr_get_calendar` and `radarr_get_calendar` take `start` and `end` as ISO dates or timestamps, with a maximum window of 90 days. The Sonarr calendar includes series titles. Both calendars cover the library, not a single title; results include `hasFile` to show whether the episode or movie is already downloaded.
 
-If Hydra redirects to an indexer, allow only that trusted origin through `NZBHYDRA_ALLOWED_REDIRECT_ORIGINS`. Cross-origin requests don't carry Hydra credentials or cookies; HTTPS cannot downgrade to HTTP. Same-origin redirects must stay within the configured service path.
+For one show's upcoming episodes, use `sonarr_get_next_up` with its Sonarr `series_id`. It lists monitored episodes in air-date order, starting from now. Set `since` to use a different date, or `include_unmonitored=true` to include episodes you aren't monitoring.
+
+### Searches and downloads
+
+`radarr_search_movie` and `sonarr_search_episodes` start a search in Radarr or Sonarr, which may download a matching release. Sonarr accepts up to 100 episode IDs from one series per call. The response includes a command ID; check it with `radarr_get_command` or `sonarr_get_command` to see whether the search finished. A finished search doesn't mean the download or import is complete.
+
+To choose a release yourself, use `radarr_get_releases` or `sonarr_get_releases`, then the matching `grab_release` tool. Sonarr requires an episode or season. These searches use indexer quota, and grabs refuse releases that are stale or rejected by the service.
+
+Downloader tools require `backend="nzbget"` or `backend="sabnzbd"`. Pause and resume take either a `job_id` from that downloader's queue or `whole_queue=true`. Omitting both is an error. Sonarr/Radarr queue and history entries include `downloadId` for matching a download to its job. NZBGet IDs are positive integer strings; SABnzbd IDs are opaque strings.
+
+`downloads_retry` retries one failed history item. NZBGet downloads it again and may replace the failed partial files.
+
+`sonarr_remove_queue_item` clears one Sonarr queue entry by its queue `item_id`. By default it leaves the downloader's files alone and doesn't blocklist the release. `remove_from_client=true` also requests removal from the downloader and may delete its files; `blocklist=true` marks the release failed. Queue removal requires Sonarr write permission.
+
+### Downloading from NZBHydra2
+
+`nzbhydra_search` searches your indexers through Hydra. `nzbhydra_get_capabilities` lists the supported filters and categories.
+
+To send a result to a downloader, call `nzbhydra_download_result` with its `result_id`, a `backend` and a configured downloader `category`. ArrChestra fetches the NZB and submits it to that downloader. The category's existing post-processing settings still apply.
+
+This bypasses Sonarr/Radarr release selection. It doesn't fulfill a Seerr request or guarantee that the download will be imported into your library.
+
+If NZB retrieval redirects to an indexer, add that indexer's origin to `NZBHYDRA_ALLOWED_REDIRECT_ORIGINS`. ArrChestra doesn't forward Hydra credentials or cookies to a different origin, follow HTTPS-to-HTTP redirects, or follow same-origin redirects outside the configured service path.
+
+</details>
 
 <details>
 <summary>Full tool list</summary>
@@ -173,11 +196,13 @@ If Hydra redirects to an indexer, allow only that trusted origin through `NZBHYD
 | Common | `ping`, `get_services` |
 | Seerr | `search_media`, `request_media`, `get_request` |
 | Radarr | `radarr_find_movies`, `radarr_get_movie`, `radarr_get_options`, `radarr_get_queue`, `radarr_get_history`, `radarr_get_health`, `radarr_get_calendar`, `radarr_get_releases`, `radarr_get_command`, `radarr_add_movie`, `radarr_set_monitored`, `radarr_search_movie`, `radarr_grab_release` |
-| Sonarr | `sonarr_find_series`, `sonarr_get_series`, `sonarr_get_episodes`, `sonarr_get_next_up`, `sonarr_get_missing`, `sonarr_get_calendar`, `sonarr_get_options`, `sonarr_get_queue`, `sonarr_get_history`, `sonarr_get_health`, `sonarr_get_releases`, `sonarr_get_command`, `sonarr_add_series`, `sonarr_set_monitoring`, `sonarr_search_episodes`, `sonarr_grab_release` |
+| Sonarr | `sonarr_find_series`, `sonarr_get_series`, `sonarr_get_episodes`, `sonarr_get_next_up`, `sonarr_get_missing`, `sonarr_get_calendar`, `sonarr_get_options`, `sonarr_get_queue`, `sonarr_get_history`, `sonarr_get_health`, `sonarr_get_releases`, `sonarr_get_command`, `sonarr_add_series`, `sonarr_set_monitoring`, `sonarr_search_episodes`, `sonarr_grab_release`, `sonarr_remove_queue_item` |
 | Downloaders | `downloads_get_status`, `downloads_get_queue`, `downloads_get_history`, `downloads_get_categories`, `downloads_pause`, `downloads_resume`, `downloads_retry` |
 | NZBHydra | `nzbhydra_get_capabilities`, `nzbhydra_search`, `nzbhydra_download_result` |
 
 The Hydra submission tool appears only when a downloader is configured. Downloader calls always require an explicit backend.
+
+Your MCP client's `tools/list` response includes the argument schemas. Most lists default to 25 results, up to 100 per page. Sonarr/Radarr queue, history and Sonarr missing episodes use `page_number`; other paged lists use `offset`. APIs that return a whole list are paged locally.
 
 </details>
 
@@ -188,18 +213,18 @@ docker build -t arrchestra-mcp .
 docker run --rm -i --env-file .env arrchestra-mcp
 ```
 
-The image runs as a non-root user. Use `-i` without a pseudo-TTY when an MCP client owns the streams. Runtime credentials are passed when the container starts; the build doesn't need access to any media service.
+The image runs as a non-root user. Use `-i`, not `-t`, for stdio clients. Pass credentials when the container starts; no media-service credentials are needed to build the image.
 
-GitHub Actions builds the image for pull requests without publishing it. Pushes to `main`, release tags matching `v*.*.*`, and manual workflow runs publish to GHCR. The image path comes from `github.repository`; it follows the repository name. Registry authentication uses GitHub's job token, not a checked-in credential.
+GitHub Actions builds pull requests without publishing an image. Pushes to `main`, release tags matching `v*.*.*`, and manual workflow runs publish to `ghcr.io/aserper/arrchestra` using GitHub's job token.
 
 ## Limits and compatibility
 
 - **Stdio only.** SSE and HTTP are disabled until server authentication is implemented. Don't expose the process through an unauthenticated network bridge.
 - Responses are limited to 8 MiB. NZBs/XML must be UTF-8 and stay within 4 MiB, 50,000 elements and depth 32. DTD/entities and compressed responses are refused. Large replies fail with a limit error.
-- HTTP runs in worker threads. Same-service writes are serialized; unrelated reads can continue. Separate processes and external clients can still race, so there is no exactly-once guarantee.
+- Writes to the same service run one at a time within this process. Reads can continue while a write is running. Other processes and clients can still make concurrent changes.
 - Treat release titles and backend messages as data, not instructions to the agent.
 
-Existing Jellyseerr installations keep their module invocation and tool names. Requests now need write opt-in; `ping` identifies `arrchestra-mcp`. `raw_request` is off unless explicitly configured, and then permits only `GET status` without parameters or a body. Seerr TV requests still default to season 1 unless seasons are specified. The unused YAML example and unauthenticated SSE startup have been removed.
+Earlier Jellyseerr installations can keep using `python -m jellyseerr_mcp`, `search_media`, `request_media` and `get_request`. Requests now require write permission. The optional legacy `raw_request` tool only accepts `GET status`, without parameters or a body. `ping` returns `arrchestra-mcp` as the service name.
 
 ## Development
 
@@ -207,8 +232,8 @@ Existing Jellyseerr installations keep their module invocation and tool names. R
 uv run --extra test pytest -q
 ```
 
-Tests mock upstream APIs with `httpx.MockTransport` and use MCP sessions to check tool discovery, permissions, native IDs, both Hydra handoffs, redirects, response limits, uncertain mutations, concurrency and real subprocess stdio.
+Tests use `httpx.MockTransport` for service API calls, MCP sessions for tool behavior, and subprocesses for stdio. They cover permissions, IDs, both Hydra downloaders, redirects, response limits, timeouts and concurrent calls.
 
-Contract coverage targets Sonarr/Radarr `/api/v3`, NZBGet v18+, SABnzbd 5.x and NZBHydra's public Newznab API. Mocked contracts don't certify every server release. Use disposable media and queues for live mutation tests.
+API tests target Sonarr/Radarr `/api/v3`, NZBGet v18+, SABnzbd 5.x and NZBHydra's public Newznab API. They don't check compatibility with every server release. Use disposable media and queues when testing writes against a live service.
 
 [Implementation notes](IMPLEMENTATION_PLAN.md) cover the code structure and follow-up work. Changes to API operations should include a mock contract test.
