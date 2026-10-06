@@ -56,6 +56,7 @@ Environment variables override `.env` in the working directory. Restart after ch
 | --- | --- |
 | Seerr / Jellyseerr | `JELLYSEERR_URL`, `JELLYSEERR_API_KEY` |
 | Radarr | `RADARR_URL`, `RADARR_API_KEY` |
+| Sonarr | `SONARR_URL`, `SONARR_API_KEY` |
 | NZBGet | `NZBGET_URL`, `NZBGET_USERNAME`, `NZBGET_PASSWORD` |
 | SABnzbd | `SABNZBD_URL`, `SABNZBD_API_KEY` |
 | NZBHydra2 | `NZBHYDRA_URL`, `NZBHYDRA_API_KEY` |
