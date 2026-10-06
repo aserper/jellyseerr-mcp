@@ -36,6 +36,23 @@ def positive_id(value: Any, name: str = "id") -> int:
     return result
 
 
+def non_negative_id(value: Any, name: str = "id") -> int:
+    """Like positive_id but allows 0.
+
+    Seerr numbers its configured Sonarr/Radarr servers from 0, so the default
+    server legitimately has id 0 and must not be rejected as missing.
+    """
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be a non-negative integer")
+    try:
+        result = int(value)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError(f"{name} must be a non-negative integer") from None
+    if str(result) != str(value) or result < 0:
+        raise ValueError(f"{name} must be a non-negative integer")
+    return result
+
+
 def pagination(offset: int, limit: int) -> None:
     if isinstance(offset, bool) or not isinstance(offset, int) or not 0 <= offset <= 1_000_000:
         raise ValueError("offset must be between 0 and 1000000")

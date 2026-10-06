@@ -56,3 +56,56 @@ def test_permissions_before_network_and_raw_allowlist():
         with pytest.raises(PermissionError):
             client.raw_read(method,endpoint)
     client.close()
+
+
+def test_server_id_zero_is_accepted():
+    """Seerr numbers its configured servers from 0; the default server is id 0.
+
+    Rejecting 0 as "not a positive integer" broke every request against a
+    default server, which is how this was found.
+    """
+    sent = []
+    def handler(request):
+        if request.method == 'GET':
+            return httpx.Response(200, json=[{'id':0,'is4k':False,'isDefault':True,
+                'activeProfileId':7,'activeDirectory':'/mnt/media/tv'}])
+        sent.append(json.loads(request.content))
+        return httpx.Response(201, json={'id':9,'status':'pending'})
+    client = JellyseerrClient(ServiceConfig('jellyseerr','https://test.local',allow_writes=True),
+                              httpx.MockTransport(handler))
+    assert client.request_media(254528,'tv',seasons=[1])['id'] == 9
+    assert sent[0]['serverId'] == 0
+    assert sent[0]['mediaId'] == 254528 and sent[0]['mediaType'] == 'tv'
+    assert sent[0]['seasons'] == [1]
+    client.close()
+
+
+def test_seerr_media_and_server_ids_are_validated_independently():
+    """media_id stays strictly positive; only the Seerr server id may be 0."""
+    def handler(request):
+        if request.method == 'GET':
+            return httpx.Response(200, json=[{'id':0,'is4k':False,'isDefault':True,
+                'activeProfileId':7,'activeDirectory':'/mnt/media/tv'}])
+        return httpx.Response(201, json={'id':1})
+    client = JellyseerrClient(ServiceConfig('jellyseerr','https://test.local',allow_writes=True),
+                              httpx.MockTransport(handler))
+    for bad in (0, -1, 'abc', True):
+        with pytest.raises(ValueError):
+            client.request_media(bad, 'tv', seasons=[1])
+    client.close()
+
+
+def test_a_zero_profile_id_is_still_usable():
+    """Seerr profiles are 0-based too, so 0 is a valid profile, not "unset"."""
+    sent = []
+    def handler(request):
+        if request.method == 'GET':
+            return httpx.Response(200, json=[{'id':0,'is4k':False,'isDefault':True,
+                'activeProfileId':0,'activeDirectory':'/mnt/media/tv'}])
+        sent.append(json.loads(request.content))
+        return httpx.Response(201, json={'id':1})
+    client = JellyseerrClient(ServiceConfig('jellyseerr','https://test.local',allow_writes=True),
+                              httpx.MockTransport(handler))
+    client.request_media(1, 'tv', seasons=[1])
+    assert sent[0]['profileId'] == 0
+    client.close()
