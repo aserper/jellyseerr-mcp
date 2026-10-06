@@ -19,6 +19,12 @@ Rules enforced here: every mutation calls require_write() before ANY outbound
 request (including preflight reads); additions never auto-search; grabs
 revalidate the inspected release (guid + indexerId) and never force rejected
 ones; episode selections are owned by the stated series and bounded to 100.
+
+Queue removal is deliberately narrow. ``DELETE /api/v3/queue/{id}`` defaults to
+``removeFromClient=false`` and ``blocklist=false``, so the default call only
+clears the *arr's own queue record and leaves the downloader's files on disk.
+The client never overrides those defaults; the caller has to ask for either.
+Blocklisting additionally POSTs the failed history entry to ``/api/v3/history/failed``.
 """
 from __future__ import annotations
 
@@ -158,6 +164,36 @@ class ArrClientBase(ServiceClient):
     def _command(self, command_id: object) -> dict:
         command_id = positive_id(command_id, 'command_id')
         return select(self.request_json('GET', f'api/v3/command/{command_id}') or {}, COMMAND_FIELDS)
+
+    def _history_failed(self, item_id: int, history_id: int | None) -> dict | None:
+        """Blocklist one entry, preferring the exact history record it came from.
+
+        Without a history id the *arr marks the newest failure whose download id
+        matches, which can be ambiguous if the same release failed more than once.
+        The returned body is untrusted upstream data and is only checked, not echoed.
+        """
+        payload: dict = {'id': item_id}
+        if history_id is not None:
+            payload['historyId'] = positive_id(history_id, 'history_id')
+        result = self.request_json('POST', 'api/v3/history/failed', json=payload, mutation=True)
+        return result if isinstance(result, dict) else None
+
+    def _raw_queue_record(self, item_id: object) -> dict:
+        """Fetch the queue page holding one item to confirm it exists and read its history id.
+
+        The *arr queue is a flat list addressed by download-client id, not an
+        addressable resource, so ``GET /api/v3/queue/{id}`` does not exist; the
+        page carrying the record is the only way to prove the id is real.
+        """
+        wanted = positive_id(item_id, 'item_id')
+        response = self.request_json('GET', 'api/v3/queue', params={
+            'page': 1, 'pageSize': 100, 'includeUnknownMovieItems': 'true',
+            'includeUnknownSeriesItems': 'true'}) or {}
+        for record in response.get('records') or []:
+            if record.get('id') == wanted:
+                return record
+        raise ValueError(f'queue item {wanted} not found in the first 100 records; '
+                         'it may have already imported or been removed')
 
     @staticmethod
     def _release_matches(releases: list, guid: str, indexer_id: int) -> dict | None:
@@ -333,6 +369,31 @@ class RadarrClient(ArrClientBase):
         payload = {'guid': guid, 'indexerId': indexer_id, 'movieId': movie_id}
         self.request_json('POST', 'api/v3/release', json=payload, mutation=True)
         return {'grabbed': True, 'guid': guid, 'indexerId': indexer_id}
+
+    def dequeue(self, item_id: int | str, remove_from_client: bool = False,
+                blocklist: bool = False) -> dict:
+        """Clear ONE queue record; by default the downloader's files stay on disk.
+
+        `remove_from_client` additionally tells the downloader to delete its copy,
+        and `blocklist` marks the release failed so it is not grabbed again. Both
+        default to False and are never inferred from the item's state, because each
+        destroys data or changes future searches. An item stuck at import (for
+        example a downgrade the profile refuses) only needs the default call.
+        """
+        self.require_write()
+        record = self._raw_queue_record(item_id)
+        params: dict = {}
+        if remove_from_client:
+            params['removeFromClient'] = 'true'
+        if blocklist:
+            params['blocklist'] = 'true'
+        self.request_json('DELETE', f'api/v3/queue/{record["id"]}',
+                          params=params or None, mutation=True)
+        if blocklist:
+            self._history_failed(record['id'], record.get('historyId'))
+        return {'removed': True, 'item_id': record['id'],
+                'remove_from_client': bool(remove_from_client),
+                'blocklisted': bool(blocklist), 'history_id': record.get('historyId')}
 
 
 class SonarrClient(ArrClientBase):
@@ -677,3 +738,28 @@ class SonarrClient(ArrClientBase):
             payload['episodeId'] = episode_id
         self.request_json('POST', 'api/v3/release', json=payload, mutation=True)
         return {'grabbed': True, 'guid': guid, 'indexerId': indexer_id}
+
+    def dequeue(self, item_id: int | str, remove_from_client: bool = False,
+                blocklist: bool = False) -> dict:
+        """Clear ONE queue record; by default the downloader's files stay on disk.
+
+        `remove_from_client` additionally tells the downloader to delete its copy,
+        and `blocklist` marks the release failed so it is not grabbed again. Both
+        default to False and are never inferred from the item's state, because each
+        destroys data or changes future searches. An episode stuck at import after
+        an upgrade (a downgrade the profile refuses) only needs the default call.
+        """
+        self.require_write()
+        record = self._raw_queue_record(item_id)
+        params: dict = {}
+        if remove_from_client:
+            params['removeFromClient'] = 'true'
+        if blocklist:
+            params['blocklist'] = 'true'
+        self.request_json('DELETE', f'api/v3/queue/{record["id"]}',
+                          params=params or None, mutation=True)
+        if blocklist:
+            self._history_failed(record['id'], record.get('historyId'))
+        return {'removed': True, 'item_id': record['id'],
+                'remove_from_client': bool(remove_from_client),
+                'blocklisted': bool(blocklist), 'history_id': record.get('historyId')}

@@ -145,6 +145,7 @@ def build_server(config: AppConfig, clients: dict[str, ServiceClient] | None = N
                 "set_monitoring": ("monitor", "Change only explicitly selected series/seasons/episodes; preserve unrelated monitoring.", True),
                 "search_episodes": ("search", "Search at most 100 explicit episodes belonging to one series; returns command ID.", True),
                 "grab_release": ("grab", "Grab a currently accepted release for a series episode/season; never force rejected releases.", True),
+                "remove_queue_item": ("dequeue", "Clear ONE queue record by native queue item ID. Defaults delete nothing: the downloader keeps its files and the release is not blocklisted. Ask for either explicitly.", True),
             }
         for suffix, (method, description, write) in mappings.items():
             register(name + "_" + suffix, getattr(client, method), description, write)

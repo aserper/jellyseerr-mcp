@@ -80,3 +80,22 @@ async def test_arr_calendar_tools_register_only_for_the_configured_service():
     assert 'kodi' not in names and 'sonarr_add_movie' not in names
     sonarr.close()
     radarr.close()
+
+
+@pytest.mark.asyncio
+async def test_queue_removal_tool_registers_for_sonarr_only():
+    """Registration is a property of the code, not of the environment: assert it
+    with injected clients so a machine with no .env still checks it."""
+    def handler(request):
+        return httpx.Response(200, json={'totalRecords': 0, 'records': []})
+
+    sonarr = SonarrClient(ServiceConfig('sonarr', 'https://sonarr.test', allow_writes=True),
+                          httpx.MockTransport(handler))
+    server = build_server(AppConfig(), {'sonarr': sonarr})
+    names = {tool.name for tool in await server.list_tools()}
+    assert 'sonarr_remove_queue_item' in names
+    assert 'radarr_remove_queue_item' not in names  # not configured, never registered
+    tool = next(t for t in await server.list_tools() if t.name == 'sonarr_remove_queue_item')
+    # It mutates state, so it must not be advertised as read-only.
+    assert tool.annotations.readOnlyHint is False
+    sonarr.close()
