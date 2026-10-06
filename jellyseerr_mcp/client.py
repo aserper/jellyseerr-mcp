@@ -7,7 +7,7 @@ from urllib.parse import quote
 import httpx
 
 from .config import AppConfig, ServiceConfig
-from .http import ServiceClient, positive_id
+from .http import ServiceClient, non_negative_id, positive_id
 
 
 class JellyseerrClient(ServiceClient):
@@ -51,11 +51,12 @@ class JellyseerrClient(ServiceClient):
             service = matches[0]
         else:
             raise ValueError(f"Configure one default {service_type} service for this quality in Seerr")
-        if not service.get("activeProfileId") or not service.get("activeDirectory"):
+        profile = service.get("activeProfileId")
+        if profile is None or not service.get("activeDirectory"):
             raise ValueError("Seerr service needs an active quality profile and root directory")
         payload = {"mediaId": media_id, "mediaType": media_type, "is4k": is_4k,
-                   "serverId": positive_id(service.get("id"), "server_id"),
-                   "profileId": service["activeProfileId"], "rootFolder": service["activeDirectory"]}
+                   "serverId": non_negative_id(service.get("id"), "server_id"),
+                   "profileId": profile, "rootFolder": service["activeDirectory"]}
         if media_type == "tv":
             # Legacy default retained. Explicit empty seasons is not silently rewritten.
             payload["seasons"] = sorted(set(seasons)) if seasons is not None else [1]
