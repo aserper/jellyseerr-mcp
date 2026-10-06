@@ -900,3 +900,92 @@ def test_sonarr_next_up_accepts_an_iso_timestamp_cutoff():
     assert client.next_up(5, since='2026-10-05T01:00:00Z')['total'] == 1  # inclusive
     assert client.next_up(5, since='2026-10-05T02:00:00Z')['total'] == 0
     client.close()
+
+
+# ------------------------------------------------------- queue removal
+
+def queue_record(id=536432398, history_id=None, **extra):
+    data = {'id': id, 'title': 'Example.S01E01.1080p.WEB.H264-GRP', 'status': 'completed',
+            'trackedDownloadStatus': 'warning', 'trackedDownloadState': 'importPending',
+            'size': 1911975621, 'sizeleft': 0, 'protocol': 'usenet',
+            'downloadClient': 'NZBGet', 'downloadId': 'abc123', 'seriesId': 5,
+            'episodeId': 101, 'statusMessages': []}
+    if history_id is not None:
+        data['historyId'] = history_id
+    data.update(extra)
+    return data
+
+
+def test_dequeue_defaults_delete_nothing_beyond_the_queue_record():
+    """The whole point of the default: clear the *arr's queue row, keep the
+    downloader's file and do not blocklist. Neither flag may be inferred."""
+    record = queue_record()
+    client, api = make_client(SonarrClient, SONARR, [
+        (r'/api/v3/queue/\d+', 'DELETE', lambda req: (204, None)),
+        (r'/api/v3/queue', 'GET', lambda req: (200, paged([record])))])
+    result = client.dequeue(record['id'])
+    assert api.path(1) == f"/api/v3/queue/{record['id']}"
+    assert api.calls[1].method == 'DELETE'
+    assert api.params(1) == {}  # no removeFromClient, no blocklist
+    assert result == {'removed': True, 'item_id': record['id'],
+                      'remove_from_client': False, 'blocklisted': False, 'history_id': None}
+    # no history call unless blocklisting was asked for
+    assert not any('history' in c.url.path for c in api.calls)
+    client.close()
+
+
+def test_dequeue_passes_explicit_flags_as_booleans():
+    record = queue_record(history_id=99)
+    client, api = make_client(SonarrClient, SONARR, [
+        (r'/api/v3/queue/\d+', 'DELETE', lambda req: (204, None)),
+        (r'/api/v3/history/failed', 'POST', lambda req: (200, {'id': 7})),
+        (r'/api/v3/queue', 'GET', lambda req: (200, paged([record])))])
+    result = client.dequeue(record['id'], remove_from_client=True, blocklist=True)
+    assert api.params(1) == {'removeFromClient': 'true', 'blocklist': 'true'}
+    assert result['remove_from_client'] is True and result['blocklisted'] is True
+    # blocklisting pins the exact history record, not "newest matching download"
+    assert api.path(2) == '/api/v3/history/failed'
+    assert api.bodies()[2] == {'id': record['id'], 'historyId': 99}
+    client.close()
+
+
+def test_dequeue_refuses_unknown_item_without_deleting():
+    client, api = make_client(SonarrClient, SONARR, [
+        (r'/api/v3/queue/\d+', 'DELETE', lambda req: (204, None)),
+        (r'/api/v3/queue', 'GET', lambda req: (200, paged([queue_record(id=1)])))])
+    with pytest.raises(ValueError, match='not found'):
+        client.dequeue(536432398)
+    assert not any(c.method == 'DELETE' for c in api.calls)
+    client.close()
+
+
+def test_dequeue_validates_the_item_id_before_any_network():
+    client, api = make_client(SonarrClient, SONARR, [
+        (r'/api/v3/queue/\d+', 'DELETE', lambda req: (204, None)),
+        (r'/api/v3/queue', 'GET', lambda req: (200, paged([])))])
+    for bad in (None, '', 0, -5, 'abc', True):
+        with pytest.raises(ValueError, match='item_id'):
+            client.dequeue(bad)
+    assert api.calls == []  # never reached the network
+    client.close()
+
+
+def test_dequeue_permission_checked_before_any_network():
+    client, api = make_client(SonarrClient, SONARR, [
+        (r'/api/v3/queue/\d+', 'DELETE', lambda req: (204, None)),
+        (r'/api/v3/queue', 'GET', lambda req: (200, paged([queue_record()])))],
+        allow_writes=False)
+    with pytest.raises(PermissionError, match='writes are disabled'):
+        client.dequeue(queue_record()['id'])
+    assert api.calls == []  # the write gate precedes the existence read too
+    client.close()
+
+
+def test_radarr_dequeue_uses_the_same_narrow_contract():
+    record = queue_record(id=777, movieId=1)
+    client, api = make_client(RadarrClient, RADARR, [
+        (r'/api/v3/queue/\d+', 'DELETE', lambda req: (204, None)),
+        (r'/api/v3/queue', 'GET', lambda req: (200, paged([record])))])
+    result = client.dequeue(777)
+    assert api.params(1) == {} and result['remove_from_client'] is False
+    client.close()
